@@ -4,7 +4,7 @@
 
 using namespace boost;
 
-using mpacket = debug_packet<audio::buffer_size * 4>;
+using mpacket = debug_packet<audio::buffer_size>;
 
 static asio::ip::address get_default_interface_address() {
     FILE* pipe_ip_default =
@@ -100,7 +100,7 @@ void print_cfg(const vcu_config& cfg) {
 
 int main(int argc, char* argv[]) {
     try {
-        vcu_config cfg = {.device = "plughw:0", .port = 8888};
+        vcu_config cfg = {.device = "default", .port = 8888};
         parse_options(cfg, argc, argv);
         print_cfg(cfg);
 
