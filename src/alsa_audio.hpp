@@ -18,7 +18,8 @@
 class audio : public base_audio<snd_pcm_t, snd_pcm_hw_params_t>{
    public:
     audio(audio_stream_t _mode);
-    
+    ~audio();
+
    public:
     void read(char* buffer, unsigned int period_size) override;
     void write(char* buffer, unsigned int period_size) override;
@@ -44,7 +45,11 @@ class audio : public base_audio<snd_pcm_t, snd_pcm_hw_params_t>{
     static constexpr snd_pcm_access_t access = SND_PCM_ACCESS_RW_INTERLEAVED;
     static constexpr snd_pcm_format_t format = SND_PCM_FORMAT_S16_LE;
 };
-audio::audio(audio_stream_t _mode) : base_audio<snd_pcm_t, snd_pcm_hw_params_t>(_mode) {
+audio::audio(audio_stream_t _mode) {
+	init(_mode);
+}
+audio::~audio() {
+	dump();
 }
 void audio::read(char* buffer, unsigned int period_size) {
      static int ret;
