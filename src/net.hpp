@@ -5,6 +5,7 @@
 #include <boost/asio.hpp>
 #include <chrono>
 #include <print>
+#include <unordered_set>
 
 using namespace boost;
 
@@ -17,8 +18,9 @@ template <typename T>
 struct applied_native_protocol {
     using cfunction_t = void(T&);
 
-    constexpr virtual void prepare(T& pckt) {}
-    constexpr virtual void was_accepted(T& pckt) {}
+    constexpr virtual void prepare(T& pckt, const asio::ip::address& addr) {}
+    constexpr virtual void was_accepted(T& pckt,
+                                        const asio::ip::address& addr) {}
 };
 
 template <unsigned int _buffer_size = 4096>
@@ -47,13 +49,17 @@ struct debug_extention {
     };
 
     struct protocol : public applied_native_protocol<packet_t> {
-        constexpr void prepare(packet_t& pckt) override {
+        constexpr void prepare(packet_t& pckt,
+                               const asio::ip::address& addr) override {
             pckt.mark_time =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
                     .count();
         }
-        constexpr void was_accepted(packet_t& pckt) override {
+        constexpr void was_accepted(packet_t& pckt,
+                                    const asio::ip::address& addr) override {
+            static std::vector<asio::ip::address> ip_s;
+            static unsigned long long count_accepted = 0;
             static unsigned long long during_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
@@ -64,27 +70,38 @@ struct debug_extention {
                     std::chrono::system_clock::now().time_since_epoch())
                     .count();
 
+            ++count_accepted;
+            if (std::find(ip_s.begin(), ip_s.end(), addr) == ip_s.end()) {
+                ip_s.push_back(addr);
+                std::println(
+                    "[DEBUG_PROTOCOL]: Sent a packet for the first time: {}",
+                    addr.to_string());
+            }
             if (now_ms - during_ms > 1000) {
+                std::println(
+                    "[DEBUG PROTOCOL]: Was recieved last packet {} "
+                    "ms({} packet/s.)",
+                    now_ms - pckt.mark_time, count_accepted);
                 during_ms = now_ms;
-                std::println("[DEBUG PROTOCOL]: was recieved last packet {} ms",
-                             now_ms - pckt.mark_time);
+                count_accepted = 0;
             }
         }
     };
 };
 
-template <typename T = packet_native_t<>,
-          typename _aprotocol = applied_native_protocol<T>,
-          typename = std::enable_if_t<
-              std::is_base_of_v<packet_native_t<T::buffer_size>, T>, void>,
-          typename = std::enable_if_t<
-              std::is_base_of_v<applied_native_protocol<T>, _aprotocol>, void>,
-          typename =
-              std::void_t<typename _aprotocol::cfunction_t,
-                          decltype(std::declval<_aprotocol&&>().prepare(
-                              std::declval<T&>())),
-                          decltype(std::declval<_aprotocol&&>().was_accepted(
-                              std::declval<T&>()))>>
+template <
+    typename T = packet_native_t<>,
+    typename _aprotocol = applied_native_protocol<T>,
+    typename = std::enable_if_t<
+        std::is_base_of_v<packet_native_t<T::buffer_size>, T>, void>,
+    typename = std::enable_if_t<
+        std::is_base_of_v<applied_native_protocol<T>, _aprotocol>, void>,
+    typename = std::void_t<
+        typename _aprotocol::cfunction_t,
+        decltype(std::declval<_aprotocol&&>().prepare(
+            std::declval<T&>(), std::declval<const asio::ip::address&>())),
+        decltype(std::declval<_aprotocol&&>().was_accepted(
+            std::declval<T&>(), std::declval<const asio::ip::address&>()))>>
 class packet final : public T {
    public:
     using packet_t = T;
@@ -98,8 +115,12 @@ class packet final : public T {
     packet(T&& pckg) : T(pckg) {}
 
    public:
-    static void prepare(packet_t& pckt) { aprotocol{}.prepare(pckt); }
-    static void was_accepted(packet_t& pckt) { aprotocol{}.was_accepted(pckt); }
+    static constexpr void prepare(T& pckt, const asio::ip::address& addr) {
+        aprotocol{}.prepare(pckt, addr);
+    }
+    static constexpr void was_accepted(T& pckt, const asio::ip::address& addr) {
+        aprotocol{}.was_accepted(pckt, addr);
+    }
 };
 
 template <unsigned int _buffer_size>
@@ -135,7 +156,6 @@ class nstream final {
             throw std::runtime_error(
                 std::format("Failed to bind udp socket({}).", ec.message()));
 
-        sock.set_option(asio::socket_base::broadcast(true));
         sock.set_option(asio::socket_base::reuse_address(true));
     }
 
@@ -156,9 +176,9 @@ class nstream final {
         std::span<typename T::buffer_el_t> buffer_tmp(pckt.get_buffer(),
                                                       T::size);
 
-        T::prepare(pckt);
         asio::ip::udp::endpoint p_sender{addr, port};
 
+        T::prepare(pckt, addr);
         sock.async_send_to(boost::asio::buffer(buffer_tmp), p_sender,
                            handle_send);
     }
@@ -182,7 +202,7 @@ class nstream final {
             throw std::runtime_error(std::format(
                 "The package arrived incomplete({}:{}).", size, T::size));
 
-        T::was_accepted(pckt);
+        T::was_accepted(pckt, addr);
     }
 
    private:

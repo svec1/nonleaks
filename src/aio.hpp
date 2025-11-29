@@ -2,10 +2,13 @@
 #define AIO_HPP
 
 #if !defined(SNDIO) && !defined(AUDIO4)
+#define AR_NAME_D "ALSA";
 #include <alsa_audio.hpp>
 #elif defined(SNDIO)
+#define AR_NAME_D "SNDIO";
 #include <sio_audio.hpp>
 #else
+#define AR_NAME_D "AUDIO4"
 #include <bsd_audio.hpp>
 #endif
 
@@ -13,6 +16,8 @@
 #include <span>
 
 using byte = char;
+
+static constexpr auto AR_NAME = AR_NAME_D;
 
 class output : private audio {
    public:

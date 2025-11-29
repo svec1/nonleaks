@@ -1,29 +1,16 @@
 #include <unistd.h>
 
-#include <alsa_udp_voice_service.hpp>
+#include <unix_udp_voice_service.hpp>
 
 using namespace boost;
 
 using mpacket = debug_packet<audio::buffer_size>;
-
-static asio::ip::address get_default_interface_address() {
-    FILE* pipe_ip_default =
-        popen("ip route show default | awk '/default/ {print $9}'", "r");
-
-    std::string ip_str("", 16);
-    fread(ip_str.data(), 1, ip_str.size(), pipe_ip_default);
-    pclose(pipe_ip_default);
-
-    if (auto it = ip_str.find_last_of("\n"); it != ip_str.npos)
-        ip_str.erase(it, ip_str.size() - 1);
-
-    return asio::ip::make_address(ip_str);
-}
+using uuv_service = unix_udp_voice_service<mpacket>;
 
 struct vcu_config {
     std::string_view device;
     asio::ip::port_type port;
-    std::vector<alsa_udp_voice_service<mpacket>::nstream_t::ipv_t> addrs;
+    std::vector<uuv_service::nstream_t::ipv_t> addrs;
 };
 
 static void parse_options(vcu_config& cfg, int argc, char* argv[]) {
@@ -70,8 +57,10 @@ static void parse_options(vcu_config& cfg, int argc, char* argv[]) {
                     break;
                 }
                 case 'h': {
-                    cfg.addrs.push_back(
-                        asio::ip::make_address_v4(current_value));
+                    auto addr = asio::ip::make_address_v4(current_value);
+                    if (std::find(cfg.addrs.begin(), cfg.addrs.end(), addr) ==
+                        cfg.addrs.end())
+                        cfg.addrs.push_back(addr);
                     break;
                 }
                 case 'p': {
@@ -85,12 +74,10 @@ static void parse_options(vcu_config& cfg, int argc, char* argv[]) {
             throw_usage(current_value, -1);
         }
     }
-
-    if (!cfg.addrs.size())
-        cfg.addrs.push_back(asio::ip::address_v4::broadcast());
 }
 
 void print_cfg(const vcu_config& cfg) {
+    std::println("-- Sound architecture: {}", AR_NAME);
     std::println("-- Sound device: {}", cfg.device);
     std::println("-- Listening port: {}", cfg.port);
     std::println("-- Possible contact addresses:");
@@ -101,14 +88,15 @@ void print_cfg(const vcu_config& cfg) {
 
 int main(int argc, char* argv[]) {
     try {
-        vcu_config cfg = {.device = "default", .port = 8888};
+        vcu_config cfg = {.device = audio::default_device_playback,
+                          .port = 8888};
         parse_options(cfg, argc, argv);
         print_cfg(cfg);
 
-        audio::device_capture = cfg.device;
         audio::device_playback = cfg.device;
+        audio::device_capture = cfg.device;
 
-        alsa_udp_voice_service<mpacket> vsc(cfg.addrs, cfg.port);
+        uuv_service vsc(cfg.addrs, cfg.port);
     } catch (std::runtime_error& excp) {
         std::println("{}", excp.what());
         return 1;

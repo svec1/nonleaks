@@ -6,7 +6,6 @@
 #include <base_audio.hpp>
 #include <cstdio>
 #include <format>
-#include <functional>
 #include <string>
 
 #define snd_call(func, ...)                  \
@@ -51,7 +50,7 @@ void audio::read(char* buffer) {
     static int ret;
 
     while ((ret = snd_pcm_readi(handle, buffer, period_size)) < 0)
-        snd_call(snd_pcm_prepare, handle);
+        snd_call(snd_pcm_recover, handle, period_size, 0);
 }
 void audio::write(char* buffer) {
     static int ret;
