@@ -71,6 +71,7 @@ void audio::init_handle() {
     }
 }
 void audio::init_params() {
+    static snd_pcm_uframes_t pcm_buffer_size = 4096;
     static snd_pcm_uframes_t pcm_period_size = 940;
 
     snd_call(snd_pcm_hw_params_malloc, &params);
@@ -81,6 +82,8 @@ void audio::init_params() {
     snd_call(snd_pcm_hw_params_set_channels, handle, params, channels);
     snd_call(snd_pcm_hw_params_set_rate, handle, params, sample_rate, 0);
 
+    snd_call(snd_pcm_hw_params_set_buffer_size_near, handle, params,
+             &pcm_buffer_size);
     snd_call(snd_pcm_hw_params_set_period_size_near, handle, params,
              &pcm_period_size, nullptr);
 }
@@ -88,7 +91,10 @@ void audio::init_sound_device() {
     snd_call(snd_pcm_hw_params, handle, params);
     snd_call(snd_pcm_prepare, handle);
 }
-void audio::dump_handle() { snd_pcm_close(handle); }
+void audio::dump_handle() {
+    snd_pcm_drain(handle);
+    snd_pcm_close(handle);
+}
 void audio::dump_params() { snd_pcm_hw_params_free(params); }
 
 #endif
