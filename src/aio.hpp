@@ -1,15 +1,15 @@
 #ifndef AIO_HPP
 #define AIO_HPP
 
-#if !defined(SNDIO) && !defined(AUDIO4)
+#if defined(ALSA)
 #define AR_NAME_D "ALSA";
 #include <alsa_audio.hpp>
 #elif defined(SNDIO)
 #define AR_NAME_D "SNDIO";
 #include <sio_audio.hpp>
-#else
-#define AR_NAME_D "AUDIO4"
-#include <bsd_audio.hpp>
+#elif defined(OSS)
+#define AR_NAME_D "OSS"
+#include <oss_audio.hpp>
 #endif
 
 #include <array>

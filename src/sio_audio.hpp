@@ -27,15 +27,13 @@ class audio : public base_audio<sio_hdl, sio_par> {
 audio::audio(audio_stream_t _mode) { init(_mode); }
 audio::~audio() { dump(); }
 void audio::read(char* buffer) {
-    static int size = period_size * bits_per_sample * channels / 8, ret;
-    std::memset(buffer, 0, size);
-    ret = sio_read(handle, buffer, size);
+    std::memset(buffer, 0, buffer_size);
+    ret = sio_read(handle, buffer, buffer_size);
 
     if (ret <= 0) throw std::runtime_error("Error reading audio.");
 }
 void audio::write(char* buffer) {
-    static int size = period_size * bits_per_sample * channels / 8, ret;
-    ret = sio_write(handle, buffer, size);
+    ret = sio_write(handle, buffer, buffer_size);
 
     if (ret <= 0) throw std::runtime_error("Error writing audio.");
 }
