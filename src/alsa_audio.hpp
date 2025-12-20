@@ -6,8 +6,12 @@
 #include <base_audio.hpp>
 
 class audio : public base_audio<snd_pcm_t*, snd_pcm_hw_params_t*> {
+   protected:
+    static constexpr snd_pcm_access_t access = SND_PCM_ACCESS_RW_INTERLEAVED;
+    static constexpr snd_pcm_format_t format = SND_PCM_FORMAT_S16_LE;
+   
    public:
-    audio(audio_stream_t _mode);
+    audio(audio_stream_mode _mode);
     ~audio() override;
 
    private:
@@ -23,52 +27,49 @@ class audio : public base_audio<snd_pcm_t*, snd_pcm_hw_params_t*> {
     void pread(char* buffer) override;
     void pwrite(const char* buffer) override;
    
-       private:
+   private:
     template <typename T, typename... Args>
-    static void throw_if(T&& func, Args&&... args) {
+    void throw_if(T&& func, Args&&... args) {
 	static int ret;
         if (ret = func(args...); ret < 0)
 	    throw_error("{}", snd_strerror(ret));
     }
-
-   protected:
-    static constexpr snd_pcm_access_t access = SND_PCM_ACCESS_RW_INTERLEAVED;
-    static constexpr snd_pcm_format_t format = SND_PCM_FORMAT_S16_LE;
 };
-audio::audio(audio_stream_t _mode) { init(_mode); }
-audio::~audio() { dump(); }
+audio::audio(audio_stream_mode _mode) { init(_mode); }
+audio::~audio() {
+    dump();
+    snd_pcm_hw_params_free(params);
+}
 void audio::pread(char* buffer) {
-    static std::size_t ret;
-    while ((ret = snd_pcm_readi(handle, buffer, period_size)) < 0)
+    while (snd_pcm_readi(handle, buffer, period_size) < 0)
         throw_if(snd_pcm_recover, handle, period_size, 0);
 }
 void audio::pwrite(const char* buffer) {
-    static std::size_t ret;
-    while ((ret = snd_pcm_writei(handle, buffer, period_size)) < 0)
+    while (snd_pcm_writei(handle, buffer, period_size) < 0)
         throw_if(snd_pcm_prepare, handle);
 }
 void audio::init_handle() {
     switch (mode) {
 	default:
-        case audio_stream_t::playback:
+        case audio_stream_mode::playback:
             throw_if(snd_pcm_open, &handle, device_playback.data(),
                      SND_PCM_STREAM_PLAYBACK, 0);
             break;
-        case audio_stream_t::capture:
+        case audio_stream_mode::capture:
             throw_if(snd_pcm_open, &handle, device_capture.data(),
                      SND_PCM_STREAM_CAPTURE, 0);
             break;
-        case audio_stream_t::bidirect:
+        case audio_stream_mode::bidirect:
 	    throw_error("Bidirect mode is not supported.");
     }
 
     handle_initialized = handle > 0;
 }
 void audio::init_params() {
-    static snd_pcm_uframes_t pcm_buffer_size = 4096;
-    static snd_pcm_uframes_t pcm_period_size = 940;
+    static constexpr snd_pcm_uframes_t pcm_buffer_size = buffer_size*multiplier_for_hardware_buffer;
+    static constexpr snd_pcm_uframes_t pcm_period_size = period_size*multiplier_for_hardware_buffer;
 
-    snd_pcm_hw_params_alloc(params);
+    throw_if(snd_pcm_hw_params_malloc, &params);
     throw_if(snd_pcm_hw_params_any, handle, params);
 
     throw_if(snd_pcm_hw_params_set_access, handle, params, access);

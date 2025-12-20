@@ -17,22 +17,26 @@ struct applied_native_protocol {
     constexpr virtual void prepare(T& pckt, const asio::ip::address& addr) {}
     constexpr virtual void was_accepted(T& pckt,
                                         const asio::ip::address& addr) {}
+
+    protected:
+	static constexpr noheap::log_impl::owner_impl::buffer_t buffer_owner = 
+		noheap::log_impl::create_owner("PROTOCOL"); 
+	static constexpr log_handler log{buffer_owner};
 };
 
 template <std::size_t _buffer_size, std::size_t _max_count_senders>
 struct packet_native_t {
-    using buffer_el_t = char;
-    using buffer_t = std::array<buffer_el_t, _buffer_size>;
-
    public:
     static constexpr std::size_t buffer_size = _buffer_size;
     static constexpr std::size_t max_count_senders = _max_count_senders;
+    
+    using buffer_t = noheap::buffer_t<buffer_size>;
 
    public:
     packet_native_t() = default;
 
-    virtual buffer_el_t* get_buffer() {
-        return reinterpret_cast<buffer_el_t*>(this) + 8;
+    virtual buffer_t::value_type* get_buffer() {
+        return reinterpret_cast<buffer_t::value_type*>(this) + 8;
     }
 
    public:
@@ -159,27 +163,27 @@ class nstream final {
             else if (size != T::size)
                 throw noheap::runtime_error("An incomplete package was sent: {} bytes.", size);
         };
-        std::span<typename T::buffer_el_t> buffer_tmp(pckt.get_buffer(),
+        static asio::ip::udp::endpoint p_sender{addr, port};
+        
+	const std::span<typename T::buffer_t::value_type> buffer_tmp(pckt.get_buffer(),
                                                       T::size);
 
-        asio::ip::udp::endpoint p_sender{addr, port};
-
         T::prepare(pckt, addr);
-        sock.async_send_to(boost::asio::buffer(buffer_tmp), p_sender,
-                           handle_send);
+        sock.async_send_to(buffer_tmp, p_sender, handle_send);
     }
 
     template <typename T>
     std::enable_if_t<
         std::is_same_v<T, packet<typename T::packet_t, typename T::aprotocol>>>
     receive_last(T& pckt, ipv_t addr) {
-        std::span<typename T::buffer_el_t> buffer_tmp(pckt.get_buffer(),
+        static boost::system::error_code ec;
+        static asio::ip::udp::endpoint p_sender{addr, port};
+        
+	const std::span<typename T::buffer_t::value_type> buffer_tmp(pckt.get_buffer(),
                                                       T::size);
-        asio::ip::udp::endpoint p_sender{addr, port};
-        boost::system::error_code ec;
 
         std::size_t size =
-            sock.receive_from(boost::asio::buffer(buffer_tmp), p_sender, 0, ec);
+            sock.receive_from(buffer_tmp, p_sender, 0, ec);
 
         if (ec.value())
             throw noheap::runtime_error("Failed to process packet: {}.", ec.message());

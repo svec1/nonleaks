@@ -3,16 +3,70 @@
 
 #include <utils.hpp>
 
-enum audio_stream_t { playback = 0, capture, bidirect };
+#if defined(ALSA)
+#define ARSND_NAME_D "ALSA"
+#elif defined(SNDIO)
+#define ARSND_NAME_D "SNDIO"
+#elif defined(FREEBSD_AUDIO)
+#define ARSND_NAME_D "FREEBSD_AUDIO"
+#elif defined(OPENBSD_AUDIO)
+#define ARSND_NAME_D "OPENBSD_AUDIO"
+#elif defined(NETBSD_AUDIO)
+#define ARSND_NAME_D "NETBSD_AUDIO"
+#endif
 
-static constexpr std::string_view audio_stream_t_to_string(audio_stream_t mode){
+enum audio_stream_mode : std::size_t { playback = 0, capture, bidirect };
+enum audio_stream_error : std::size_t {
+    null = 0,
+    failed_open = 1,
+    failed_start,
+    failed_stop,
+    failed_close,
+    failed_set_params,
+    failed_get_params,
+    failed_get_status,
+    error_writing,
+    error_reading,
+    architectural_feature,
+};
+
+static constexpr std::string_view audio_stream_mode_to_string(audio_stream_mode mode){
     switch(mode){
-	case audio_stream_t::playback:
+	case audio_stream_mode::playback:
 	    return "PLAYBACK";
-	case audio_stream_t::capture:
+	case audio_stream_mode::capture:
 	    return "CAPTURE";
-	case audio_stream_t::bidirect:
+	case audio_stream_mode::bidirect:
 	    return "BIDIRECT";
+	default:
+	    return "UNDEFINED";
+    }
+}
+
+static consteval std::string_view audio_stream_error_to_string(audio_stream_error error_number){
+    switch(error_number){
+	case audio_stream_error::failed_open:
+	    return "Failed to open the stream.";
+	case audio_stream_error::failed_start:
+	    return "Failed to start the stream.";
+	case audio_stream_error::failed_stop:
+	    return "Failed to stop the stream.";
+	case audio_stream_error::failed_close:
+	    return "Failed to close the stream.";
+	case audio_stream_error::failed_set_params:
+	    return "Failed to set parameters of the stream.";
+	case audio_stream_error::failed_get_params:
+	    return "Failed to get parameters of the stream.";
+	case audio_stream_error::failed_get_status:
+	    return "Failed to get status of the stream.";
+	case audio_stream_error::error_writing:
+	    return "Error writing audio.";
+	case audio_stream_error::error_reading:
+	    return "Error writing audio.";
+	case audio_stream_error::architectural_feature:
+	    return "Architecture error.";
+	default:
+	    return "Undefined error.";
     }
 }
 
@@ -20,18 +74,22 @@ template <typename THandle, typename TParams>
 class base_audio {
    public:
     static constexpr std::string_view arsnd_name = ARSND_NAME_D;
-    static constexpr std::size_t arsnd_name_size = ARSND_NAME_SIZE_D;
     static constexpr std::string_view default_device_playback = "default";
     static constexpr std::string_view default_device_capture = "default";
 
+    static constexpr float latency = 0.01;
     static constexpr std::size_t bits_per_sample = 16;
     static constexpr std::size_t sample_rate = 44100;
     static constexpr std::size_t channels = 2;
-    static constexpr std::size_t period_size = 512;
-    static constexpr std::size_t buffer_size =
-        period_size * channels * bits_per_sample / 8;
+    static constexpr std::size_t period_size = sample_rate * latency;
+    static constexpr std::size_t buffer_size = period_size * channels * bits_per_sample / 8;
+    static constexpr std::size_t diviser_for_hardware_buffer = 4;
 
-    using buffer_t = std::array<char, buffer_size>;
+    static constexpr noheap::log_impl::owner_impl::buffer_t buffer_owner =
+	noheap::log_impl::create_owner(arsnd_name);
+    static constexpr log_handler log{buffer_owner};
+    
+    using buffer_t = noheap::buffer_t<buffer_size>;
     using handle_t = THandle;
     using params_t = TParams;
 	
@@ -44,7 +102,7 @@ class base_audio {
     constexpr void write(const buffer_t& buffer);
 
    protected:
-    void init(audio_stream_t _mode);
+    void init(audio_stream_mode _mode);
     void dump();
     
    protected:
@@ -62,30 +120,34 @@ class base_audio {
 
    protected:
     template<typename... Args>
-    void message(std::format_string<Args...> format, Args&&... args){
-	noheap::print_impl::buffer_t buffer;
-    	std::fill_n(buffer.begin(), buffer.size(), 0);
-	
-	auto end_it = std::format_to(buffer.begin(), "{}: ", arsnd_name);
-	end_it = std::format_to(end_it, format, std::forward<Args>(args)...);
-	*end_it = '\n';
-
-	noheap::print_impl::out_buffer(std::move(buffer));
+    constexpr void message(std::format_string<Args...> format, Args&&... args){
+	log.to_console(format, std::forward<Args>(args)...);
     }
-    template<bool on_errno = true, typename... Args>
-    void throw_error(std::format_string<Args...> format, Args&&... args){
- 	noheap::runtime_error::buffer_t buffer;
+    template<audio_stream_error error_number, bool on_errno = true, typename... Args>
+    constexpr void throw_error(std::format_string<Args...> format = "", Args&&... args){
+	noheap::runtime_error::buffer_t buffer, buffer_format;
 
-    	std::fill_n(buffer.begin(), buffer.size(), 0);
-	if(format.get().size() || (on_errno && errno)){
-		auto end_it = std::format_to(buffer.begin(), "{}: ", arsnd_name);
-		end_it = std::format_to(end_it, format, std::forward<Args>(args)...);
-		if (on_errno && errno){
-		    std::format_to(end_it, "[errno = {}]", strerror(errno));
-    		    errno = 0;
-		}
+	auto end_it = buffer.begin();
+    	std::fill_n(end_it, buffer.size(), 0);
+    	std::fill_n(buffer_format.begin(), buffer_format.size(), 0);
+	
+	if constexpr(error_number != audio_stream_error::null){	
+	    end_it = std::format_to_n(end_it, noheap::runtime_error::buffer_size, "{}", audio_stream_error_to_string(error_number)).out;
+	    if(!format.get().empty()){
+	    	std::format_to_n(buffer_format.begin(), std::abs(std::distance(buffer.end(), end_it)), format, std::forward<Args>(args)...);
+	    	end_it = std::format_to_n(end_it, std::abs(std::distance(buffer.end(), end_it)), "\n<{}>", buffer_format.data()).out;
+	    }
 	}
-	throw noheap::runtime_error(std::move(buffer));
+	
+	if (on_errno && errno){
+	    end_it = std::format_to_n(end_it, noheap::runtime_error::buffer_size, ".errno = ").out;
+	    strerror_r(errno, end_it, std::abs(std::distance(buffer.end(), end_it)));
+     	    errno = 0;
+	}
+	
+	noheap::runtime_error error(std::move(buffer));
+	error.set_owner(buffer_owner);
+	throw std::move(error);
     }
 
    public:
@@ -96,7 +158,7 @@ class base_audio {
     THandle handle;
     static TParams params;
     
-    audio_stream_t mode;
+    audio_stream_mode mode;
     bool possible_bidirect_stream,
 	 handle_initialized = false,
 	 params_initialized = false,
@@ -105,16 +167,16 @@ class base_audio {
 };
 
 template <typename THandle, typename TParams>
-void base_audio<THandle, TParams>::init(audio_stream_t _mode) {
+void base_audio<THandle, TParams>::init(audio_stream_mode _mode) {
     try {
 	mode = _mode;
 	possible_bidirect_stream = (device_playback == device_capture);
 
- 	if(mode == audio_stream_t::bidirect && !possible_bidirect_stream)
-	   throw_error("For bidirectional, different device names were specified."); 
+ 	if(mode == audio_stream_mode::bidirect && !possible_bidirect_stream)
+	   throw_error<audio_stream_error::architectural_feature>("For bidirectional, different device names were specified."); 
         
 	init_handle();
-	if (!handle_initialized) throw_error<true>("");
+	if (!handle_initialized) throw_error<audio_stream_error::null, true>();
 	if (!params_initialized){ 
 	    init_params();
 	    params_initialized = true;
@@ -122,9 +184,9 @@ void base_audio<THandle, TParams>::init(audio_stream_t _mode) {
         init_sound_device();
 	start_audio();
     } catch (noheap::runtime_error& excp) {
-	throw_error("Failed to open the stream: {} {}\n{}",
-                        audio_stream_t_to_string(mode),
-                        (!(int)mode ? device_playback : device_capture),
+	throw_error<audio_stream_error::failed_open>("{} {}: {}",
+                        audio_stream_mode_to_string(mode),
+                        (!(bool)mode ? device_playback : device_capture),
 			excp.what());
     }
 }
@@ -135,16 +197,16 @@ void base_audio<THandle, TParams>::dump() {
 }
 template <typename THandle, typename TParams>
 constexpr void base_audio<THandle, TParams>::read(buffer_t& buffer){
-    if(mode == audio_stream_t::playback)
-	throw_error("Failed to read of the stream({}).", audio_stream_t_to_string(mode));
+    if(mode == audio_stream_mode::playback)
+	throw_error<audio_stream_error::architectural_feature>("The reading cannot be played back to the {} stream.", audio_stream_mode_to_string(mode));
     std::fill_n(buffer.begin(), buffer_size, 0);
 
     if(!mute_reading) pread(buffer.data());
 }
 template <typename THandle, typename TParams>
 constexpr void base_audio<THandle, TParams>::write(const buffer_t& buffer){
-    if(mode == audio_stream_t::capture)
-	throw_error("Failed to write of the stream({}).", audio_stream_t_to_string(mode));
+    if(mode == audio_stream_mode::capture)
+	throw_error<audio_stream_error::architectural_feature>("The writing cannot be played back to the {} stream.", audio_stream_mode_to_string(mode));
     
     if(!mute_writing) pwrite(buffer.data());
 }
@@ -167,5 +229,17 @@ std::string_view base_audio<THandle, TParams>::device_playback =
 template <typename THandle, typename TParams>
 std::string_view base_audio<THandle, TParams>::device_capture =
     base_audio<THandle, TParams>::default_device_capture;
+
+#if defined(ALSA)
+#include <alsa_audio.hpp>
+#elif defined(SNDIO)
+#include <sndio_audio.hpp>
+#elif defined(FREEBSD_AUDIO)
+#include <oss_audio.hpp>
+#elif defined(OPENBSD_AUDIO)
+#include <openbsd_audio.hpp>
+#elif defined(NETBSD_AUDIO)
+#include <netbsd_audio.hpp>
+#endif
 
 #endif

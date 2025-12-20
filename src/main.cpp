@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
 
         uuv_service vsc(cfg.addrs.data, cfg.port);
     } catch (noheap::runtime_error& excp) {
-        noheap::println("{}", excp.what());
+        noheap::log_impl::logx(1, excp.has_set_owner() ? excp.get_owner() : noheap::log_impl::create_owner(""), "{}", excp.what());
         return 1;
     }
 

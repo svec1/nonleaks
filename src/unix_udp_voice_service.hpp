@@ -29,6 +29,11 @@ class unix_udp_voice_service {
                                 const nstream_t::ipv_t& addr);
 
    public:
+    static constexpr noheap::log_impl::owner_impl::buffer_t buffer_owner =
+	 noheap::log_impl::create_owner("UUV_SERVICE") ;
+    static constexpr log_handler log{buffer_owner};
+    
+   public:
     input in;
     output out;
 
@@ -77,7 +82,10 @@ void unix_udp_voice_service<T>::send_samples(
             });
         }
     } catch (noheap::runtime_error& excp) {
-        noheap::println("{}", excp.what());
+        if(excp.has_set_owner())
+            log.to_all_with_subowner(excp.get_owner(), "{}", excp.what());
+        else
+            log.to_all("{}", excp.what());
         exit(1);
     }
 }
@@ -96,8 +104,12 @@ void unix_udp_voice_service<T>::receive_samples(nstream_t& net, output& out,
 	    }
         }
     } catch (noheap::runtime_error& excp) {
-        noheap::println("{}", excp.what());
-        exit(1);
+	if(excp.has_set_owner())
+            log.to_all_with_subowner(excp.get_owner(), "{}", excp.what());
+        else
+            log.to_all("{}", excp.what());
+	exit(1);
     }
 }
+
 #endif

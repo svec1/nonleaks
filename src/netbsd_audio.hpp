@@ -9,14 +9,14 @@
 
 class audio : public sio_base_audio {
     public:
-	audio(audio_stream_t _mode);
+	audio(audio_stream_mode _mode);
 	~audio() override;   
  
     protected:
 	void init_params() override;
 };
 
-audio::audio(audio_stream_t _mode) { init(_mode); }
+audio::audio(audio_stream_mode _mode) { init(_mode); }
 audio::~audio() { dump(); }
 void audio::init_params(){
     audio_info_t ap; 
@@ -34,10 +34,10 @@ void audio::init_params(){
     ap.record.precision = bits_per_sample;
     
     if(ioctl(handle, AUDIO_SETINFO, &ap) == -1)
-        throw_error("Failed to set audio params.");
+        throw_error<audio_stream_error::failed_set_params>();
     
     if(ioctl(handle, AUDIO_GETINFO, &ap) == -1)
-        throw_error("Failed to get audio params.");
+        throw_error<audio_stream_error::failed_get_params>();
 }
 
 #endif

@@ -26,37 +26,28 @@ class sio_base_audio : public base_audio<int, int> {
 };
 
 sio_base_audio::sio_base_audio() {
-    pfd.fd = handle;
-    pfd.events = POLLIN | POLLOUT;
-    pfd.revents = 0;
 }
 void sio_base_audio::pread(char* buffer) {
-    static int ret;
-    ret = poll(&pfd, 1, -1);
-    
-    if(ret == -1)
-	throw_error("Error call of poll.");	
+    if(poll(&pfd, 1, -1) == -1)
+	throw_error<audio_stream_error::architectural_feature>("Error call of poll.");
     else if(!(pfd.revents & POLLIN)){
 	message("Audio stream is empty.");
     	return;
     }
 
     if(::read(handle, buffer, buffer_size) == -1)
-	throw_error("Error reading audio.");
+	throw_error<audio_stream_error::error_reading>();
 }
 void sio_base_audio::pwrite(const char* buffer) {
-    static int ret;
-    ret = poll(&pfd, 1, -1);
-    
-    if(ret == -1)
-	throw_error("Error call of poll.");	
+    if(poll(&pfd, 1, -1) == -1)
+	throw_error<audio_stream_error::architectural_feature>("Error call of poll.");
     else if(!(pfd.revents & POLLOUT)){
 	message("Audio stream is overheap.");
     	return;
     }
     
     if(::write(handle, buffer, buffer_size) == -1)
-	throw_error("Error writing audio.");
+	throw_error<audio_stream_error::error_writing>();
 } 
 void sio_base_audio::init_handle(){
     if(possible_bidirect_stream){
@@ -66,21 +57,25 @@ void sio_base_audio::init_handle(){
     else 
         switch (mode) {
 	    default:
-            case audio_stream_t::playback:
+            case audio_stream_mode::playback:
 	    	handle = ::open(device_playback.data(), O_RDONLY);
 	    	break;
-	    case audio_stream_t::capture:
+	    case audio_stream_mode::capture:
 	    	handle = ::open(device_capture.data(), O_WRONLY);
 	    	break;
-	    case audio_stream_t::bidirect:
+	    case audio_stream_mode::bidirect:
 	    	handle = ::open(device_playback.data(), O_RDWR);
 	    	break;
     	}
+
+    pfd.fd = handle;
+    pfd.events = POLLIN | POLLOUT;
+    pfd.revents = 0;
     
     handle_initialized = handle > 0;
 }
 void sio_base_audio::init_sound_device(){
-    if(!params_initialized)
+    if(!params_initialized || possible_bidirect_stream)
 	return;
 
     init_params();
