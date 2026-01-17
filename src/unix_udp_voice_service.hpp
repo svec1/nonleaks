@@ -1,8 +1,6 @@
 #ifndef ALSA_UDP_VOICE_SERVICE_HPP
 #define ALSA_UDP_VOICE_SERVICE_HPP
 
-#include <thread>
-
 #include "aio.hpp"
 #include "crypt.hpp"
 #include "net.hpp"

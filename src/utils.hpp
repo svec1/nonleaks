@@ -3,6 +3,7 @@
 
 #include <unistd.h>
 
+#include <thread>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -22,6 +23,26 @@
 
 namespace std {
 using ssize_t = std::make_signed_t<std::size_t>;
+
+#ifdef _LIBCPP_VERSION
+
+class jthread{
+  public:
+    template<typename Func, typename... Args>
+      requires std::regular_invocable<Func, Args...> 
+    explicit jthread(Func &&func, Args&&... args) : t(std::forward<Func>(func), std::forward<Args>(args)...){
+    }
+    ~jthread(){
+	if(t.joinable())
+	    t.join();
+    }
+
+  private:
+    std::thread t;
+};
+
+#endif
+
 }
 
 constexpr std::size_t get_now_ms() {

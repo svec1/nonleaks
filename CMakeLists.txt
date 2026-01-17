@@ -17,9 +17,8 @@ find_package(OpenSSL)
 target_link_libraries(${UUV} PRIVATE OpenSSL::Crypto)
 
 if(SNDIO AND (LINUX OR BSD))
-	find_library(LIBSNDIO NAME sndio)
-	message(STATUS ${LIBSNDIO})
-        if("${LIBSNDIO}" STREQUAL "")	
+	find_library(LIBSNDIO NAMES sndio)
+        if("${LIBSNDIO}" STREQUAL "LIBSNDIO-NOTFOUND")	
 		message(FATAL_ERROR "[sndio] lib was not found.")
 	endif()
 	

@@ -1,9 +1,6 @@
 #ifndef AIO_HPP
 #define AIO_HPP
 
-#include <array>
-#include <span>
-
 #include "base_audio.hpp"
 
 class input : private audio {
