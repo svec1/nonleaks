@@ -2,21 +2,25 @@
 #define ALSA_UDP_VOICE_SERVICE_HPP
 
 #include "aio.hpp"
+#include "coder_audio.hpp"
 #include "crypt.hpp"
 #include "net.hpp"
 
 using namespace boost;
 
-template <std::size_t _buffer_size, std::size_t _max_count_addrs,
-          std::size_t _max_count_jitter_packet>
+template <std::size_t _max_stream_size,
+          std::size_t _min_count_blocks_for_nonwaiting>
 struct voice_extention {
-    static constexpr std::size_t max_count_jitter_packet =
-        _max_count_jitter_packet;
+    static constexpr std::size_t max_stream_size = _max_stream_size;
+    static constexpr std::size_t min_count_blocks_for_nonwaiting =
+        _min_count_blocks_for_nonwaiting;
+
+    using ca_type = coder_audio<default_base_audio::cfg>;
 
   public:
-    struct packet_t : public packet_native_t<_buffer_size, _max_count_addrs> {
+    struct packet_t : public packet_native_t<ca_type::encode_buffer_size> {
         static constexpr std::size_t uuid_size = 32;
-        using uuid_type = openssl_context::buffer_t<uuid_size>;
+        using uuid_type = openssl_context::buffer_type<uuid_size>;
 
         uuid_type uuid;
         size_t sequence_number = 0;
@@ -24,56 +28,35 @@ struct voice_extention {
     struct protocol_t
         : public protocol_native_t<packet_t, noheap::log_impl::create_owner(
                                                  "VOICE_PROTOCOL")> {
-        using array_jitter_buffers_t = noheap::monotonic_array<
-            std::pair<typename packet_t::uuid_type,
-                      noheap::ring_buffer<packet_t, max_count_jitter_packet>>,
-            packet_t::max_count_addrs>;
-
-        constexpr void prepare(packet_t &pckt) const override {
+      public:
+        constexpr void
+        prepare(packet_t &pckt,
+                protocol_t::callback_prepare_t callback) const override {
             static openssl_context ossl_ctx;
-            static typename packet_t::uuid_type uuid{
+            static const typename packet_t::uuid_type uuid{
                 ossl_ctx.get_random_bytes<packet_t::uuid_size>()};
+
+            callback(pckt);
 
             pckt.uuid = uuid;
             pckt.sequence_number = local_sequence_number++;
         }
         constexpr void
         handle(packet_t &pckt,
-               protocol_t::callback_func_t callback) const override {
-            if (!filled &&
-                !std::none_of(buffer.begin(), buffer.end(),
-                              [](const array_jitter_buffers_t::value_type &el) {
-                                  return el.second.size() + 1 ==
-                                         max_count_jitter_packet;
-                              }))
+               protocol_t::callback_handle_t callback) const override {
+            jitter_buffer.push_back(std::move(pckt));
+
+            if (jitter_buffer.size() == max_stream_size)
                 filled = true;
 
-            auto it = buffer.begin();
-            if (it = std::find_if(
-                    buffer.begin(), buffer.end(),
-                    [&](const array_jitter_buffers_t::value_type &el) {
-                        return !std::memcmp(el.first.data(), pckt.uuid.data(),
-                                            packet_t::uuid_size);
-                    });
-                it == buffer.cend()) {
-                if (buffer.size() == packet_t::max_count_addrs)
-                    return;
-
-                buffer.push_back(
-                    std::make_pair<
-                        typename array_jitter_buffers_t::value_type::first_type,
-                        typename array_jitter_buffers_t::value_type::
-                            second_type>(std::move(pckt.uuid), {}));
-
-                it = buffer.end() - 1;
-            }
-            it->second.push(std::move(pckt));
             if (filled)
-                callback(it->second.pop());
+                callback(jitter_buffer.pop_front());
         }
 
       private:
-        mutable array_jitter_buffers_t buffer;
+        mutable noheap::monotonic_array<packet_t, max_stream_size>
+            jitter_buffer;
+
         mutable std::size_t local_sequence_number = 0;
         mutable bool filled = false;
     };
@@ -86,101 +69,127 @@ struct voice_extention {
         using packet = ::action<packet>::packet;
 
       public:
-        constexpr void init_buffer(packet::buffer_t &buffer) const override {
-            static input in;
-            for (std::size_t i = 0;
-                 i < packet_t::buffer_size / audio::buffer_size; ++i) {
-                audio::buffer_t buffer_tmp = in.get_samples();
-                std::copy(buffer_tmp.begin(), buffer_tmp.end(),
-                          buffer.begin() + i * audio::buffer_size);
-            }
-        }
-        constexpr void process_packet(packet &&pckt) const override {
-            using array_buffers_t = noheap::ring_buffer<
-                std::pair<std::size_t, typename packet::buffer_t>,
-                max_count_jitter_packet>;
+        action() : running(true) {
+            in_stream = std::async(std::launch::async, [this] {
+                try {
+                    input in;
 
-            static std::mutex m;
-            static array_buffers_t buffers;
-            {
-                std::lock_guard lock(m);
-                if (auto it = std::find_if(
-                        buffers.lbegin(), buffers.lend(),
-                        [&](const typename array_buffers_t::buffer_type::
-                                value_type &el) {
-                            return el.first == pckt.sequence_number;
-                        });
-                    it != buffers.lend()) {
-                    std::transform(it->second.cbegin(), it->second.cend(),
-                                   pckt.buffer.cend(), it->second.begin(),
-                                   [](const auto &right, const auto &left) {
-                                       return (right + left) / 2;
-                                   });
-                } else
-                    buffers.push(typename array_buffers_t::value_type{
-                        pckt.sequence_number, pckt.buffer});
-            }
-            static std::jthread j([]() {
-                output out;
-
-                while (true) {
-                    typename packet::packet_t::buffer_t buffer;
-                    {
-                        std::lock_guard lock(m);
-                        buffer = buffers.pop().second;
+                    while (running.load()) {
+                        typename ca_type::encode_buffer_type buffer_tmp =
+                            ca.encode(in.get_samples());
+                        {
+                            std::lock_guard lock(in_stream_m);
+                            in_stream_buffer.push(buffer_tmp);
+                        }
                     }
-                    out.play_samples(buffer);
+                } catch (...) {
+                    running.store(false);
+                    throw;
+                }
+            });
+            out_stream = std::async(std::launch::async, [this] {
+                try {
+                    output out;
+
+                    std::this_thread::sleep_for(std::chrono::milliseconds(
+                        default_base_audio::cfg.latency * max_stream_size));
+                    while (running.load()) {
+                        if (out_stream_buffer.size() <
+                            min_count_blocks_for_nonwaiting)
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(
+                                    default_base_audio::cfg.latency));
+                        typename packet::packet_type::buffer_type buffer_tmp;
+                        {
+                            std::lock_guard lock(out_stream_m);
+                            buffer_tmp = out_stream_buffer.pop();
+                        }
+                        auto begin = get_now_ms();
+                        out.play_samples(ca.decode(buffer_tmp, false));
+                    }
+                } catch (...) {
+                    running.store(false);
+                    throw;
                 }
             });
         }
+        ~action() {
+            running.store(false);
+            wait_stopping();
+        }
+
+      private:
+        void check_running() {
+            if (running.load())
+                return;
+
+            wait_stopping();
+        }
+
+        void wait_stopping() {
+            if (in_stream.valid())
+                in_stream.get();
+            if (out_stream.valid())
+                out_stream.get();
+        }
+
+      public:
+        constexpr void init_packet(packet::packet_t &pckt) override {
+            check_running();
+            std::lock_guard lock(in_stream_m);
+            pckt.buffer = in_stream_buffer.pop();
+        }
+        constexpr void process_packet(packet::packet_t &&pckt) override {
+            check_running();
+            std::lock_guard lock(out_stream_m);
+            out_stream_buffer.push(pckt.buffer);
+        }
+
+      private:
+        std::mutex in_stream_m, out_stream_m;
+        std::future<void> in_stream, out_stream;
+        std::atomic<bool> running;
+
+        ca_type ca;
+
+        noheap::ring_buffer<typename packet::buffer_type, max_stream_size>
+            in_stream_buffer, out_stream_buffer;
     };
 };
 
-template <std::size_t _max_count_addrs> class unix_udp_voice_service {
+class unix_udp_voice_service {
   public:
     static constexpr ipv v = ipv::v4;
 
-    using nstream_t = nstream<v>;
-    using voice_extention_d =
-        voice_extention<audio::buffer_size, _max_count_addrs, 64>;
+    using voice_extention_d = voice_extention<64, 16>;
+    using udp_stream_t = net_stream_udp<typename voice_extention_d::action, v>;
     using packet = voice_extention_d::packet;
+    using ipv_t = udp_stream_t::ipv_t;
 
   public:
-    unix_udp_voice_service(
-        const noheap::monotonic_array<nstream_t::ipv_t, packet::max_count_addrs>
-            &addrs,
-        asio::ip::port_type port);
+    unix_udp_voice_service(asio::ip::port_type port);
+
+  public:
+    void run(const ipv_t &addr);
 
   private:
-    void run(const noheap::monotonic_array<nstream_t::ipv_t,
-                                           packet::max_count_addrs> &addrs);
-
-  private:
-    static constexpr noheap::log_impl::owner_impl::buffer_t buffer_owner =
+    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
         noheap::log_impl::create_owner("UUV_SERVICE");
     static constexpr log_handler log{buffer_owner};
 
   private:
     asio::io_context io;
-    nstream_t net;
+    udp_stream_t udp_stream;
 };
-template <std::size_t _max_count_addrs>
-unix_udp_voice_service<_max_count_addrs>::unix_udp_voice_service(
-    const noheap::monotonic_array<nstream_t::ipv_t, packet::max_count_addrs>
-        &addrs,
-    asio::ip::port_type port)
-    : net(io, port) {
-    run(addrs);
-}
-template <std::size_t _max_count_addrs>
-void unix_udp_voice_service<_max_count_addrs>::run(
-    const noheap::monotonic_array<nstream_t::ipv_t, packet::max_count_addrs>
-        &addrs) {
+unix_udp_voice_service::unix_udp_voice_service(asio::ip::port_type port)
+    : udp_stream(io, port) {}
+void unix_udp_voice_service::run(const ipv_t &addr) {
     try {
-        packet pckt_for_sender, pckt_for_receiver, pckt_for_receiver2;
+        thread_local packet pckt_for_receiving, pckt_for_sending;
 
-        net.receive_from<typename voice_extention_d::action>(pckt_for_receiver);
-        net.send_to<typename voice_extention_d::action>(pckt_for_sender, addrs);
+        udp_stream.register_receive_handler(pckt_for_receiving);
+        udp_stream.register_send_handler<default_base_audio::cfg.latency>(
+            pckt_for_sending, addr);
 
         io.run();
 

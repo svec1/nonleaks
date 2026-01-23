@@ -3,29 +3,35 @@
 
 #include "base_audio.hpp"
 
-class input : private audio {
+using default_base_audio = audio<{.bitrate = 120'000,
+                                  .latency = 10,
+                                  .channels = 2,
+                                  .sample_rate = 48000,
+                                  .bits_per_sample = 16}>;
+
+class input : public default_base_audio {
   public:
     input();
 
   public:
-    audio::buffer_t get_samples();
+    buffer_type get_samples();
 };
-class output : private audio {
+class output : public default_base_audio {
   public:
     output();
 
   public:
-    void play_samples(const audio::buffer_t &bytes);
+    void play_samples(const buffer_type &bytes);
 };
 
-input::input() : audio(audio_stream_mode::capture) {}
-audio::buffer_t input::get_samples() {
-    audio::buffer_t bytes;
-    read(bytes);
-    return bytes;
+input::input() : default_base_audio(audio_stream_mode::capture) {}
+input::buffer_type input::get_samples() {
+    buffer_type buffer;
+    read(buffer);
+    return buffer;
 }
 
-output::output() : audio(audio_stream_mode::playback) {}
-void output::play_samples(const audio::buffer_t &bytes) { write(bytes); }
+output::output() : default_base_audio(audio_stream_mode::playback) {}
+void output::play_samples(const buffer_type &bytes) { write(bytes); }
 
 #endif

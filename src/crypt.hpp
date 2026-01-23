@@ -10,23 +10,22 @@
 class openssl_context {
   public:
     template <std::size_t size>
-    using buffer_t = noheap::buffer_bytes_t<size, unsigned char>;
+    using buffer_type = noheap::buffer_bytes_type<size, std::uint8_t>;
 
+  public:
     enum class algorithm { SHA1 = 0, SHA256, MD5 };
-    template <algorithm> struct hash {
-        using type = void;
-    };
-    template <> struct hash<algorithm::SHA1> {
-        static constexpr std::size_t size = 20;
-        using type = buffer_t<size>;
-    };
-    template <> struct hash<algorithm::SHA256> {
-        static constexpr std::size_t size = 32;
-        using type = buffer_t<size>;
-    };
-    template <> struct hash<algorithm::MD5> {
-        static constexpr std::size_t size = 16;
-        using type = buffer_t<size>;
+    template <algorithm algorithm_crypt>
+    static consteval std::size_t get_hash_size() {
+        if constexpr (algorithm_crypt == algorithm::SHA1)
+            return 20;
+        else if constexpr (algorithm_crypt == algorithm::SHA256)
+            return 32;
+        else if constexpr (algorithm_crypt == algorithm::MD5)
+            return 16;
+    }
+
+    template <algorithm algorithm_crypt> struct hash {
+        using type = buffer_type<get_hash_size<algorithm_crypt>()>;
     };
 
   public:
@@ -37,14 +36,15 @@ class openssl_context {
     template <algorithm algorithm_crypt>
     hash<algorithm_crypt>::type get_hash(std::string_view data);
 
-    template <std::size_t size> static buffer_t<size> get_random_bytes();
+    template <std::size_t buffer_size>
+    static buffer_type<buffer_size> get_random_bytes();
 
     template <algorithm algorithm_crypt>
     static bool hash_compare(const hash<algorithm_crypt>::type &h1,
                              const hash<algorithm_crypt>::type &h2);
 
   public:
-    static constexpr noheap::log_impl::owner_impl::buffer_t buffer_owner =
+    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
         noheap::log_impl::create_owner("CRYPT");
 
   protected:
@@ -87,8 +87,8 @@ openssl_context::get_hash(std::string_view buffer) {
     return buffer_tmp;
 }
 template <std::size_t size>
-openssl_context::buffer_t<size> openssl_context::get_random_bytes() {
-    noheap::buffer_bytes_t<size, unsigned char> buffer_tmp;
+openssl_context::buffer_type<size> openssl_context::get_random_bytes() {
+    buffer_type<size> buffer_tmp;
     RAND_bytes(buffer_tmp.data(), size);
     return buffer_tmp;
 }

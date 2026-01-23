@@ -13,8 +13,13 @@ add_executable(${UUV} ${SRC_FILES})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g -pthread")
 target_include_directories(${UUV} PRIVATE ${LIBBOOST_PATH} src/)
 
+
 find_package(OpenSSL)	
 target_link_libraries(${UUV} PRIVATE OpenSSL::Crypto)
+
+set(OPUS_BUILD_SHARED_LIBRARY ON)
+add_subdirectory(thirdparty/opus)	
+target_link_libraries(${UUV} PRIVATE Opus::opus)
 
 if(SNDIO AND (LINUX OR BSD))
 	find_library(LIBSNDIO NAMES sndio)

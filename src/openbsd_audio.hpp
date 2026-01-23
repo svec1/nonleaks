@@ -7,20 +7,42 @@
 
 #include "sio_base_audio.hpp"
 
-class audio : public sio_base_audio {
+template <audio_config _cfg> class audio : public sio_base_audio<_cfg> {
   public:
     audio(audio_stream_mode _mode);
     ~audio() override;
 
   protected:
     void init_params() override;
-    void start_audio() override;
-    void stop_audio() override;
 };
 
-audio::audio(audio_stream_mode _mode) { init(_mode); }
-audio::~audio() { dump(); }
-void audio::init_params() {
+template <audio_config _cfg>
+audio<_cfg>::audio(audio_stream_mode _mode) : sio_base_audio<_cfg>(_mode) {
+    audio_status status;
+    if (ioctl(handle, AUDIO_GETSTATUS, &status) == -1)
+        audio::template throw_error<
+            audio::audio_stream_error::failed_get_status>();
+
+    if (!status.pause)
+        return;
+
+    if (ioctl(handle, AUDIO_START) == -1)
+        audio::template throw_error<audio::audio_stream_error::failed_start>();
+}
+
+template <audio_config _cfg> audio<_cfg>::~audio() {
+    audio_status status;
+    if (ioctl(handle, AUDIO_GETSTATUS, &status) == -1)
+        audio::template throw_error<
+            audio::audio_stream_error::failed_get_status>();
+
+    if (status.pause)
+        return;
+
+    if (ioctl(handle, AUDIO_STOP) == -1)
+        audio::template throw_error<audio::audio_stream_error::failed_stop>();
+}
+template <audio_config _cfg> void audio<_cfg>::init_params() {
     audio_swpar ap;
 
     AUDIO_INITPAR(&ap);
@@ -36,39 +58,12 @@ void audio::init_params() {
     ap.nblks = 4;
     ap.round = buffer_size / 4;
 
-    message("{}, {}", buffer_size, ap.round);
     if (ioctl(handle, AUDIO_SETPAR, &ap) == -1)
-        throw_error<audio_stream_error::failed_set_params>();
+        audio::template throw_error<
+            audio::audio_stream_error::failed_set_params>();
 
     if (ioctl(handle, AUDIO_GETPAR, &ap) == -1)
-        throw_error<audio_stream_error::failed_get_params>();
-
-    message("{}, {}", ap.nblks, ap.round);
-}
-void audio::start_audio() {
-    sio_base_audio::start_audio();
-
-    audio_status status;
-    if (ioctl(handle, AUDIO_GETSTATUS, &status) == -1)
-        throw_error<audio_stream_error::failed_get_status>();
-
-    if (!status.pause)
-        return;
-
-    if (ioctl(handle, AUDIO_START) == -1)
-        throw_error<audio_stream_error::failed_start>();
-}
-void audio::stop_audio() {
-    sio_base_audio::stop_audio();
-
-    audio_status status;
-    if (ioctl(handle, AUDIO_GETSTATUS, &status) == -1)
-        throw_error<audio_stream_error::failed_get_status>();
-
-    if (status.pause)
-        return;
-
-    if (ioctl(handle, AUDIO_STOP) == -1)
-        throw_error<audio_stream_error::failed_stop>();
+        audio::template throw_error<
+            audio::audio_stream_error::failed_get_params>();
 }
 #endif

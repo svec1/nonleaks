@@ -3,7 +3,6 @@
 
 #include <unistd.h>
 
-#include <thread>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -23,27 +22,7 @@
 
 namespace std {
 using ssize_t = std::make_signed_t<std::size_t>;
-
-#ifdef _LIBCPP_VERSION
-
-class jthread{
-  public:
-    template<typename Func, typename... Args>
-      requires std::regular_invocable<Func, Args...> 
-    explicit jthread(Func &&func, Args&&... args) : t(std::forward<Func>(func), std::forward<Args>(args)...){
-    }
-    ~jthread(){
-	if(t.joinable())
-	    t.join();
-    }
-
-  private:
-    std::thread t;
-};
-
-#endif
-
-}
+} // namespace std
 
 constexpr std::size_t get_now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -56,17 +35,22 @@ namespace noheap {
 static constexpr std::size_t output_buffer_size = 512;
 
 template <std::size_t buffer_size, typename T = char>
-using buffer_bytes_t = std::array<T, buffer_size>;
+    requires std::is_integral<T>::value
+using buffer_bytes_type = std::array<T, buffer_size>;
+
+template <typename T>
+concept Buffer_bytes_type =
+    std::same_as<T, buffer_bytes_type<sizeof(T), typename T::value_type>>;
 
 class print_impl final {
   public:
     static constexpr std::size_t buffer_size = output_buffer_size;
-    using buffer_t = buffer_bytes_t<buffer_size>;
+    using buffer_type = buffer_bytes_type<buffer_size>;
 
   public:
     template <char end_ch, typename... Args>
     static void out(std::format_string<Args...> format, Args &&...args) {
-        buffer_t buffer{};
+        buffer_type buffer{};
         auto end_it = std::format_to_n(buffer.begin(), buffer_size, format,
                                        std::forward<Args>(args)...);
         *end_it.out = end_ch;
@@ -74,7 +58,7 @@ class print_impl final {
         out_buffer(std::move(buffer));
     }
 
-    static void out_buffer(buffer_t &&buffer, std::size_t outstream = 1) {
+    static void out_buffer(buffer_type &&buffer, std::size_t outstream = 1) {
         ::write(outstream, buffer.data(), buffer_size);
     }
 };
@@ -92,26 +76,25 @@ class log_impl final {
   public:
     struct owner_impl final {
         static constexpr std::size_t buffer_size = 24;
-        using buffer_t = buffer_bytes_t<buffer_size>;
+        using buffer_type = buffer_bytes_type<buffer_size>;
     };
 
-    static consteval owner_impl::buffer_t create_owner(std::string_view owner) {
-        owner_impl::buffer_t buffer_owner{};
+    static consteval owner_impl::buffer_type
+    create_owner(std::string_view owner) {
+        owner_impl::buffer_type buffer_owner{};
 
-        for (std::size_t i = 0; i < owner_impl::buffer_size; ++i) {
-            if (i == owner.size())
-                break;
+        for (std::size_t i = 0; i < owner_impl::buffer_size && i < owner.size();
+             ++i)
             buffer_owner[i] = owner[i];
-        }
 
         return buffer_owner;
     };
 
     template <typename... Args>
-    static constexpr print_impl::buffer_t
-    create_log_data(owner_impl::buffer_t buffer_owner,
+    static constexpr print_impl::buffer_type
+    create_log_data(owner_impl::buffer_type buffer_owner,
                     std::format_string<Args...> format, Args &&...args) {
-        print_impl::buffer_t buffer{};
+        print_impl::buffer_type buffer{};
         auto end_it = buffer.begin();
 
         if (buffer_owner[0] != '\0') {
@@ -135,7 +118,7 @@ class log_impl final {
 class runtime_error final : public std::exception {
   public:
     static constexpr std::size_t buffer_size = output_buffer_size;
-    using buffer_t = buffer_bytes_t<buffer_size>;
+    using buffer_type = buffer_bytes_type<buffer_size>;
 
   public:
     template <typename... Args>
@@ -147,13 +130,13 @@ class runtime_error final : public std::exception {
         }
     }
     template <typename... Args>
-    runtime_error(noheap::log_impl::owner_impl::buffer_t _buffer_owner,
+    runtime_error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
                   std::format_string<Args...> format, Args &&...args)
         : runtime_error(format, std::forward<Args>(args)...) {
         buffer_owner = _buffer_owner;
     }
     runtime_error() = default;
-    runtime_error(buffer_t &&_buffer) : buffer(std::move(_buffer)) {}
+    runtime_error(buffer_type &&_buffer) : buffer(std::move(_buffer)) {}
     runtime_error(const runtime_error &excp) {
         buffer = excp.buffer;
         set_owner(excp.buffer_owner);
@@ -161,71 +144,126 @@ class runtime_error final : public std::exception {
     ~runtime_error() override = default;
 
   public:
-    void set_owner(log_impl::owner_impl::buffer_t _buffer_owner) {
+    void set_owner(log_impl::owner_impl::buffer_type _buffer_owner) {
         buffer_owner = _buffer_owner;
         owner_set = true;
     }
 
   public:
     const char *what() const noexcept override { return buffer.data(); }
-    log_impl::owner_impl::buffer_t get_owner() const noexcept {
+    log_impl::owner_impl::buffer_type get_owner() const noexcept {
         return buffer_owner;
     }
     bool has_setting_owner() const noexcept { return owner_set; }
 
   private:
-    buffer_t buffer{};
-    log_impl::owner_impl::buffer_t buffer_owner{};
+    buffer_type buffer{};
+    log_impl::owner_impl::buffer_type buffer_owner{};
 
     bool owner_set;
 };
 
-template <typename T, std::size_t _buffer_size> class monotonic_array final {
+template <std::size_t _buffer_size> struct pseudoheap_monotonic_array;
+
+template <typename T, std::size_t _buffer_size> struct basic_array {
+    friend struct pseudoheap_monotonic_array<_buffer_size>;
+
   public:
     static constexpr std::size_t buffer_size = _buffer_size;
 
     using value_type = T;
     using buffer_type = std::array<value_type, buffer_size>;
 
+  protected:
+    buffer_type buffer{};
+};
+
+template <std::size_t _buffer_size> struct pseudoheap_monotonic_array {
+  private:
+    using basic_array_type = basic_array<int8_t, _buffer_size>;
+
   public:
-    constexpr monotonic_array() : buffer{} {}
+    pseudoheap_monotonic_array() = default;
+
+  public:
+    template <typename T>
+        requires std::is_pointer<T>::value
+    T malloc(std::size_t area_size) {
+        if (offset + area_size >= basic_array_type::buffer_size)
+            throw runtime_error("Pseudoheap is full. Last request: {}",
+                                area_size);
+
+        typename basic_array_type::value_type *ptr =
+            this->basic_array.buffer.data() + offset;
+        offset += area_size;
+        return reinterpret_cast<T>(ptr);
+    }
+
+  private:
+    basic_array_type basic_array;
+    std::size_t offset = 0;
+};
+template <typename T, std::size_t _buffer_size>
+struct const_array : public basic_array<T, _buffer_size> {
+  public:
+    constexpr const_array() = default;
+
+  public:
+    const const_array::buffer_type &operator&() const & { return this->buffer; }
+};
+template <typename T, std::size_t _buffer_size>
+class monotonic_array : public basic_array<T, _buffer_size> {
+  public:
+    constexpr monotonic_array() {}
     monotonic_array(monotonic_array &&array) {
-        std::swap(buffer, array.buffer);
+        std::swap(this->buffer, array.buffer);
         count_pushed = array.count_pushed;
     }
 
   public:
     std::size_t size() const { return count_pushed; }
-    buffer_type::iterator begin() { return buffer.begin(); }
-    buffer_type::iterator end() { return buffer.begin() + count_pushed; }
-    buffer_type::iterator bend() { return buffer.end(); }
-    buffer_type::const_iterator begin() const { return buffer.cbegin(); }
-    buffer_type::const_iterator end() const {
-        return buffer.cbegin() + count_pushed;
+    monotonic_array::buffer_type::iterator begin() {
+        return this->buffer.begin();
     }
-    buffer_type::const_iterator bend() const { return buffer.end(); }
-    buffer_type::const_iterator cbegin() const { return buffer.begin(); }
-    buffer_type::const_iterator cend() const {
-        return buffer.begin() + count_pushed;
+    monotonic_array::buffer_type::iterator end() {
+        return this->buffer.begin() + count_pushed;
     }
-    buffer_type::const_iterator cbend() const { return buffer.end(); }
+    monotonic_array::buffer_type::iterator bend() { return this->buffer.end(); }
+    monotonic_array::buffer_type::const_iterator begin() const {
+        return this->buffer.cbegin();
+    }
+    monotonic_array::buffer_type::const_iterator end() const {
+        return this->buffer.cbegin() + count_pushed;
+    }
+    monotonic_array::buffer_type::const_iterator bend() const {
+        return this->buffer.end();
+    }
+    monotonic_array::buffer_type::const_iterator cbegin() const {
+        return this->buffer.begin();
+    }
+    monotonic_array::buffer_type::const_iterator cend() const {
+        return this->buffer.begin() + count_pushed;
+    }
+    monotonic_array::buffer_type::const_iterator cbend() const {
+        return this->buffer.end();
+    }
 
   public:
     template <typename _T>
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push_back(_T &&el) {
-        if (count_pushed == buffer_size)
+        if (count_pushed == monotonic_array::buffer_size)
             throw runtime_error("Buffer overflow.");
-        buffer[count_pushed++] = std::forward<_T>(el);
+        this->buffer[count_pushed++] = std::forward<_T>(el);
     }
     T pop_front() {
         if (count_pushed == 0)
             throw runtime_error("Invalid access.");
 
-        value_type tmp = std::move(buffer[0]);
+        typename monotonic_array::value_type tmp = std::move(this->buffer[0]);
 
         for (std::size_t i = 0; i < count_pushed - 1; ++i)
-            buffer[i] = std::move(buffer[i + 1]);
+            this->buffer[i] = std::move(this->buffer[i + 1]);
 
         --count_pushed;
 
@@ -233,8 +271,8 @@ template <typename T, std::size_t _buffer_size> class monotonic_array final {
     }
 
   public:
-    T &operator[](std::size_t it) { return buffer[it]; }
-    const T &operator[](std::size_t it) const { return buffer[it]; }
+    T &operator[](std::size_t it) { return this->buffer[it]; }
+    const T &operator[](std::size_t it) const { return this->buffer[it]; }
 
     T &at(std::size_t it) {
         if (it >= count_pushed)
@@ -248,16 +286,10 @@ template <typename T, std::size_t _buffer_size> class monotonic_array final {
     }
 
   private:
-    buffer_type buffer;
     std::size_t count_pushed = 0;
 };
-template <typename T, std::size_t _max_count_elements> class ring_buffer {
-  public:
-    static constexpr std::size_t max_count_elements = _max_count_elements;
-
-    using value_type = T;
-    using buffer_type = std::array<T, max_count_elements>;
-
+template <typename T, std::size_t _buffer_size>
+class ring_buffer : public basic_array<T, _buffer_size> {
   public:
     constexpr ring_buffer() = default;
 
@@ -265,31 +297,32 @@ template <typename T, std::size_t _max_count_elements> class ring_buffer {
     template <typename _T>
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push(_T &&el) {
-        buffer[back] = std::forward<T>(el);
-        back = (back + 1) % max_count_elements;
+        this->buffer[back] = std::forward<T>(el);
+        back = (back + 1) % ring_buffer::buffer_size;
 
-        if (count_pushed < max_count_elements)
+        if (count_pushed < ring_buffer::buffer_size)
             ++count_pushed;
         else
-            front = (front + 1) % max_count_elements;
+            front = (front + 1) % ring_buffer::buffer_size;
     }
     T pop() {
         if (!count_pushed)
             return {};
 
-        value_type tmp = std::move(buffer[front]);
-        front = (front + 1) % max_count_elements;
+        typename ring_buffer::value_type tmp = std::move(this->buffer[front]);
+        front = (front + 1) % ring_buffer::buffer_size;
         --count_pushed;
         return tmp;
     }
 
   public:
     std::size_t size() const { return count_pushed; }
-    buffer_type::iterator lbegin() { return buffer.begin(); }
-    buffer_type::iterator lend() { return buffer.begin() + count_pushed; }
+    ring_buffer::buffer_type::iterator lbegin() { return this->buffer.begin(); }
+    ring_buffer::buffer_type::iterator lend() {
+        return this->buffer.begin() + count_pushed;
+    }
 
   private:
-    buffer_type buffer{};
     std::size_t back = 0, front = 0, count_pushed = 0;
 };
 
@@ -423,22 +456,22 @@ class synchronized_pool_resource_static final
 };
 
 template <typename TContainer, std::size_t _buffer_size,
-          buffer_resouce_static _buffer_resource_t>
+          buffer_resouce_static _buffer_resource_type>
 struct basic_container {
     static constexpr std::size_t buffer_size = _buffer_size;
 
-    using container_t = TContainer;
-    using buffer_resource_t = _buffer_resource_t;
+    using container_type = TContainer;
+    using buffer_resource_type = _buffer_resource_type;
 
   public:
-    container_t &operator*() { return data; }
-    const container_t &operator*() const { return data; }
-    container_t *operator->() { return &data; }
-    const container_t *operator->() const { return &data; }
+    container_type &operator*() { return data; }
+    const container_type &operator*() const { return data; }
+    container_type *operator->() { return &data; }
+    const container_type *operator->() const { return &data; }
 
   private:
-    buffer_bytes_t<buffer_size> buffer{};
-    buffer_resource_t buffer_r{buffer.data(), buffer_size};
+    buffer_bytes_type<buffer_size> buffer{};
+    buffer_resource_type buffer_r{buffer.data(), buffer_size};
     std::pmr::polymorphic_allocator<typename TContainer::value_type> allocator{
         &buffer_r};
 
@@ -471,19 +504,21 @@ class log_handler {
     enum output_type : std::size_t { flush = 0, async };
 
   public:
-    constexpr log_handler(noheap::log_impl::owner_impl::buffer_t _buffer_owner)
+    constexpr log_handler(
+        noheap::log_impl::owner_impl::buffer_type _buffer_owner)
         : buffer_owner(_buffer_owner) {
-        outstreams[0] = 1;
+        out_streams[0] = 1;
     }
-    constexpr log_handler(noheap::log_impl::owner_impl::buffer_t _buffer_owner,
-                          std::span<std::size_t> _outstreams)
+    constexpr log_handler(
+        noheap::log_impl::owner_impl::buffer_type _buffer_owner,
+        std::span<std::size_t> _out_streams)
         : buffer_owner(_buffer_owner) {
-        if (outstreams.size() > max_outstream_count)
+        if (out_streams.size() > max_outstream_count)
             throw noheap::runtime_error(
                 "The streams limit has been exceeded: {}.",
                 max_outstream_count);
-        for (std::size_t i = 0; i < outstreams.size(); ++i)
-            outstreams[i] = _outstreams[i];
+        for (std::size_t i = 0; i < out_streams.size(); ++i)
+            out_streams[i] = _out_streams[i];
     }
 
   public:
@@ -495,30 +530,29 @@ class log_handler {
     template <output_type async = output_type::flush, typename... Args>
     void to_stream(std::size_t it_outstream, std::format_string<Args...> format,
                    Args &&...args) const {
-        this->log<async>(outstreams.at(it_outstream), buffer_owner, format,
+        this->log<async>(out_streams.at(it_outstream), buffer_owner, format,
                          std::forward<Args>(args)...);
     }
 
     template <output_type async = output_type::flush, typename... Args>
     void to_all(std::format_string<Args...> format, Args &&...args) const {
         std::for_each(
-            outstreams.begin(), outstreams.end(), [&](std::size_t outstream) {
+            out_streams.begin(), out_streams.end(), [&](std::size_t outstream) {
                 if (!outstream)
                     return;
-                this->log<async>(outstreams.at(outstream), buffer_owner, format,
-                                 std::forward<Args>(args)...);
+                this->log<async>(out_streams.at(outstream), buffer_owner,
+                                 format, std::forward<Args>(args)...);
             });
     }
     template <output_type async = output_type::flush, typename... Args>
-    void
-    to_all_with_subowner(noheap::log_impl::owner_impl::buffer_t buffer_subowner,
-                         std::format_string<Args...> format,
-                         Args &&...args) const {
+    void to_all_with_subowner(
+        noheap::log_impl::owner_impl::buffer_type buffer_subowner,
+        std::format_string<Args...> format, Args &&...args) const {
         std::for_each(
-            outstreams.begin(), outstreams.end(), [&](std::size_t outstream) {
+            out_streams.begin(), out_streams.end(), [&](std::size_t outstream) {
                 if (!outstream)
                     return;
-                noheap::print_impl::buffer_t buffer;
+                noheap::print_impl::buffer_type buffer;
                 auto end_it = buffer.begin();
                 end_it =
                     std::format_to_n(end_it, noheap::print_impl::buffer_size,
@@ -532,7 +566,7 @@ class log_handler {
 
     template <output_type async = output_type::flush, typename... Args>
     void exception_to_all(noheap::runtime_error &excp) const {
-        std::for_each(outstreams.begin(), outstreams.end(),
+        std::for_each(out_streams.begin(), out_streams.end(),
                       [&](std::size_t outstream) {
                           if (!outstream)
                               return;
@@ -545,7 +579,7 @@ class log_handler {
     template <output_type async, typename... Args>
     static constexpr void
     log(std::size_t outstream,
-        noheap::log_impl::owner_impl::buffer_t buffer_owner,
+        noheap::log_impl::owner_impl::buffer_type buffer_owner,
         std::format_string<Args...> format, Args &&...args) {
         switch (async) {
         default:
@@ -571,8 +605,8 @@ class log_handler {
     }
 
   private:
-    std::array<std::size_t, max_outstream_count> outstreams{};
-    noheap::log_impl::owner_impl::buffer_t buffer_owner;
+    std::array<std::size_t, max_outstream_count> out_streams{};
+    noheap::log_impl::owner_impl::buffer_type buffer_owner;
 };
 
 #endif

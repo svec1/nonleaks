@@ -1,23 +1,21 @@
 #include "unix_udp_voice_service.hpp"
 
-static constexpr std::size_t max_count_addrs = 16;
-static constexpr log_handler log_main{{}};
-
 using namespace boost;
+using dba = default_base_audio;
+using uuv_service = unix_udp_voice_service;
 
-using uuv_service = unix_udp_voice_service<max_count_addrs>;
+static constexpr log_handler log_main{{}};
 
 struct vcu_config {
     std::string_view device;
     asio::ip::port_type port;
-    noheap::monotonic_array<uuv_service::nstream_t::ipv_t, max_count_addrs>
-        addrs;
+    uuv_service::ipv_t addr;
 };
 
 static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
     static constexpr auto throw_usage = [](auto arg,
                                            int expected_argument = 0) {
-        noheap::runtime_error::buffer_t buffer;
+        noheap::runtime_error::buffer_type buffer;
 
         auto end_it = buffer.begin();
         end_it = std::format_to_n(end_it, noheap::runtime_error::buffer_size,
@@ -70,14 +68,7 @@ static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
                 break;
             }
             case 'h': {
-                auto addr = asio::ip::make_address_v4(current_value);
-                if (std::find(cfg.addrs.begin(), cfg.addrs.end(), addr) ==
-                    cfg.addrs.end()) {
-                    if (cfg.addrs.size() == max_count_addrs)
-                        throw_usage(current_value, -1);
-
-                    cfg.addrs.push_back(addr);
-                }
+                cfg.addr = asio::ip::make_address_v4(current_value);
                 break;
             }
             case 'p': {
@@ -94,26 +85,32 @@ static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
 }
 
 void print_cfg(const vcu_config &cfg) {
-    log_main.to_console(" -- Sound architecture: {}", audio::arsnd_name);
+    using ca_type = uuv_service::voice_extention_d::ca_type;
+
+    log_main.to_console(" -- Sound architecture: {}", dba::arsnd_name);
     log_main.to_console(" -- Sound device: {}", cfg.device);
     log_main.to_console(" -- Listening port: {}", cfg.port);
-    log_main.to_console(" -- Possible contact addresses:");
-    std::for_each(cfg.addrs.begin(), cfg.addrs.end(), [](auto &addr) {
-        log_main.to_console("    | {}", addr.to_string());
-    });
+    log_main.to_console(" -- Contact address: {}", cfg.addr.to_string());
+    log_main.to_console(" -- Audio config: ");
+    log_main.to_console("    | Bitrate: {} kbit/s", dba::cfg.bitrate / 1000);
+    log_main.to_console("    | Latency: {} ms", dba::cfg.latency);
+    log_main.to_console("    | Channels: {}", dba::cfg.channels);
+    log_main.to_console("    | Rate: {} hz", dba::cfg.sample_rate);
+    log_main.to_console("    | Sample size: {} bits", dba::cfg.bits_per_sample);
 }
 
 int main(int argc, char *argv[]) {
     try {
-        vcu_config cfg = {.device = audio::default_device_playback,
-                          .port = 8888};
+        vcu_config cfg = {.device = dba::default_device_playback, .port = 8888};
         parse_options(cfg, argc, argv);
         print_cfg(cfg);
 
-        audio::device_playback = cfg.device;
-        audio::device_capture = cfg.device;
+        dba::device_playback = cfg.device;
+        dba::device_capture = cfg.device;
 
-        uuv_service vsc(cfg.addrs, cfg.port);
+        unix_udp_voice_service vsc(cfg.port);
+        vsc.run(cfg.addr);
+
     } catch (noheap::runtime_error &excp) {
         log_main.exception_to_all(excp);
         return 1;
