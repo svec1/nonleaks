@@ -1,44 +1,41 @@
 #include "unix_udp_voice_service.hpp"
 
 using namespace boost;
-using dba = default_base_audio;
+using dba         = default_base_audio;
 using uuv_service = unix_udp_voice_service;
 
 static constexpr log_handler log_main{{}};
 
 struct vcu_config {
-    std::string_view device;
+    std::string_view    device;
     asio::ip::port_type port;
-    uuv_service::ipv_t addr;
+    uuv_service::ipv_t  addr;
 };
 
 static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
-    static constexpr auto throw_usage = [](auto arg,
-                                           int expected_argument = 0) {
-        noheap::runtime_error::buffer_type buffer;
+    static constexpr auto throw_usage = [](auto arg, int expected_argument = 0) {
+        using re = noheap::runtime_error;
 
-        auto end_it = buffer.begin();
-        end_it = std::format_to_n(end_it, noheap::runtime_error::buffer_size,
+        re::buffer_type buffer;
+        auto            end_it = buffer.begin();
+
+        end_it = std::format_to_n(end_it, re::buffer_size,
                                   "Usage: alsa_tcp_voice [-D sound device] [-h "
                                   "IP Host] [-p port]\n")
                      .out;
         if (expected_argument == 1)
-            end_it =
-                std::format_to_n(end_it, noheap::runtime_error::buffer_size,
-                                 "Option requires an argument: {}", arg)
-                    .out;
+            end_it = std::format_to_n(end_it, re::buffer_size,
+                                      "Option requires an argument: {}", arg)
+                         .out;
         else if (expected_argument == -1)
             end_it =
-                std::format_to_n(end_it, noheap::runtime_error::buffer_size,
-                                 "Invalid argument: {}", arg)
+                std::format_to_n(end_it, re::buffer_size, "Invalid argument: {}", arg)
                     .out;
         else
             end_it =
-                std::format_to_n(end_it, noheap::runtime_error::buffer_size,
-                                 "Invalid option: {}", arg)
-                    .out;
+                std::format_to_n(end_it, re::buffer_size, "Invalid option: {}", arg).out;
 
-        throw noheap::runtime_error(std::move(buffer));
+        throw re(std::move(buffer));
     };
 
     static constexpr auto get_argument = [](int argc, char *argv[], int &i) {
@@ -58,25 +55,25 @@ static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
         if (argv[i][0] != '-')
             throw_usage(argv[i]);
 
-        std::string_view option = argv[i];
+        std::string_view option        = argv[i];
         std::string_view current_value = get_argument(argc, argv, i);
 
         try {
             switch (option[1]) {
-            case 'D': {
-                cfg.device = current_value;
-                break;
-            }
-            case 'h': {
-                cfg.addr = asio::ip::make_address_v4(current_value);
-                break;
-            }
-            case 'p': {
-                cfg.port = std::stoi(current_value.data());
-                break;
-            }
-            default:
-                throw_usage(option[1]);
+                case 'D': {
+                    cfg.device = current_value;
+                    break;
+                }
+                case 'h': {
+                    cfg.addr = asio::ip::make_address_v4(current_value);
+                    break;
+                }
+                case 'p': {
+                    cfg.port = std::stoi(current_value.data());
+                    break;
+                }
+                default:
+                    throw_usage(option[1]);
             }
         } catch (system::system_error &) {
             throw_usage(current_value, -1);
@@ -106,7 +103,7 @@ int main(int argc, char *argv[]) {
         print_cfg(cfg);
 
         dba::device_playback = cfg.device;
-        dba::device_capture = cfg.device;
+        dba::device_capture  = cfg.device;
 
         unix_udp_voice_service vsc(cfg.port);
         vsc.run(cfg.addr);

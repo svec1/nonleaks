@@ -8,8 +8,7 @@
 
 using namespace boost;
 
-template <std::size_t _max_stream_size,
-          std::size_t _min_count_blocks_for_nonwaiting>
+template<std::size_t _max_stream_size, std::size_t _min_count_blocks_for_nonwaiting>
 struct voice_extention {
     static constexpr std::size_t max_stream_size = _max_stream_size;
     static constexpr std::size_t min_count_blocks_for_nonwaiting =
@@ -17,33 +16,30 @@ struct voice_extention {
 
     using ca_type = coder_audio<default_base_audio::cfg>;
 
-  public:
+public:
     struct packet_t : public packet_native_t<ca_type::encode_buffer_size> {
         static constexpr std::size_t uuid_size = 32;
-        using uuid_type = openssl_context::buffer_type<uuid_size>;
+        using uuid_type                        = openssl_context::buffer_type<uuid_size>;
 
         uuid_type uuid;
-        size_t sequence_number = 0;
+        size_t    sequence_number = 0;
     };
-    struct protocol_t
-        : public protocol_native_t<packet_t, noheap::log_impl::create_owner(
-                                                 "VOICE_PROTOCOL")> {
-      public:
-        constexpr void
-        prepare(packet_t &pckt,
-                protocol_t::callback_prepare_t callback) const override {
-            static openssl_context ossl_ctx;
+    struct protocol_t : public protocol_native_t<packet_t, noheap::log_impl::create_owner(
+                                                               "VOICE_PROTOCOL")> {
+    public:
+        constexpr void prepare(packet_t                      &pckt,
+                               protocol_t::callback_prepare_t callback) const override {
+            static openssl_context                    ossl_ctx;
             static const typename packet_t::uuid_type uuid{
                 ossl_ctx.get_random_bytes<packet_t::uuid_size>()};
 
             callback(pckt);
 
-            pckt.uuid = uuid;
+            pckt.uuid            = uuid;
             pckt.sequence_number = local_sequence_number++;
         }
-        constexpr void
-        handle(packet_t &pckt,
-               protocol_t::callback_handle_t callback) const override {
+        constexpr void handle(packet_t                     &pckt,
+                              protocol_t::callback_handle_t callback) const override {
             jitter_buffer.push_back(std::move(pckt));
 
             if (jitter_buffer.size() == max_stream_size)
@@ -53,24 +49,23 @@ struct voice_extention {
                 callback(jitter_buffer.pop_front());
         }
 
-      private:
-        mutable noheap::monotonic_array<packet_t, max_stream_size>
-            jitter_buffer;
+    private:
+        mutable noheap::monotonic_array<packet_t, max_stream_size> jitter_buffer;
 
         mutable std::size_t local_sequence_number = 0;
-        mutable bool filled = false;
+        mutable bool        filled                = false;
     };
 
-  public:
+public:
     using packet = packet<packet_t, protocol_t>;
 
-  public:
+public:
     struct action : public ::action<packet> {
         using packet = ::action<packet>::packet;
 
-      public:
+    public:
         action() : running(true) {
-            in_stream = std::async(std::launch::async, [this] {
+            in_stream  = std::async(std::launch::async, [this] {
                 try {
                     input in;
 
@@ -94,11 +89,9 @@ struct voice_extention {
                     std::this_thread::sleep_for(std::chrono::milliseconds(
                         default_base_audio::cfg.latency * max_stream_size));
                     while (running.load()) {
-                        if (out_stream_buffer.size() <
-                            min_count_blocks_for_nonwaiting)
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(
-                                    default_base_audio::cfg.latency));
+                        if (out_stream_buffer.size() < min_count_blocks_for_nonwaiting)
+                            std::this_thread::sleep_for(std::chrono::milliseconds(
+                                default_base_audio::cfg.latency));
                         typename packet::packet_type::buffer_type buffer_tmp;
                         {
                             std::lock_guard lock(out_stream_m);
@@ -118,7 +111,7 @@ struct voice_extention {
             wait_stopping();
         }
 
-      private:
+    private:
         void check_running() {
             if (running.load())
                 return;
@@ -133,7 +126,7 @@ struct voice_extention {
                 out_stream.get();
         }
 
-      public:
+    public:
         constexpr void init_packet(packet::packet_t &pckt) override {
             check_running();
             std::lock_guard lock(in_stream_m);
@@ -145,8 +138,8 @@ struct voice_extention {
             out_stream_buffer.push(pckt.buffer);
         }
 
-      private:
-        std::mutex in_stream_m, out_stream_m;
+    private:
+        std::mutex        in_stream_m, out_stream_m;
         std::future<void> in_stream, out_stream;
         std::atomic<bool> running;
 
@@ -158,31 +151,33 @@ struct voice_extention {
 };
 
 class unix_udp_voice_service {
-  public:
+public:
     static constexpr ipv v = ipv::v4;
 
     using voice_extention_d = voice_extention<64, 16>;
-    using udp_stream_t = net_stream_udp<typename voice_extention_d::action, v>;
-    using packet = voice_extention_d::packet;
-    using ipv_t = udp_stream_t::ipv_t;
+    using udp_stream_t      = net_stream_udp<typename voice_extention_d::action, v>;
+    using packet            = voice_extention_d::packet;
+    using ipv_t             = udp_stream_t::ipv_t;
 
-  public:
+public:
     unix_udp_voice_service(asio::ip::port_type port);
 
-  public:
+public:
     void run(const ipv_t &addr);
 
-  private:
+private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
         noheap::log_impl::create_owner("UUV_SERVICE");
     static constexpr log_handler log{buffer_owner};
 
-  private:
+private:
     asio::io_context io;
-    udp_stream_t udp_stream;
+    udp_stream_t     udp_stream;
 };
+
 unix_udp_voice_service::unix_udp_voice_service(asio::ip::port_type port)
-    : udp_stream(io, port) {}
+    : udp_stream(io, port) {
+}
 void unix_udp_voice_service::run(const ipv_t &addr) {
     try {
         thread_local packet pckt_for_receiving, pckt_for_sending;
