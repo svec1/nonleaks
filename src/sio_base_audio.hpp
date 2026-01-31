@@ -10,7 +10,7 @@
 template<audio_config _cfg>
 class sio_base_audio : public base_audio<_cfg> {
 public:
-    sio_base_audio(audio_stream_mode _mode);
+    sio_base_audio(stream_audio_mode _mode);
     virtual ~sio_base_audio() override = default;
 
 protected:
@@ -26,20 +26,20 @@ private:
 };
 
 template<audio_config _cfg>
-sio_base_audio<_cfg>::sio_base_audio(audio_stream_mode _mode) : base_audio<_cfg>(_mode) {
+sio_base_audio<_cfg>::sio_base_audio(stream_audio_mode _mode) : base_audio<_cfg>(_mode) {
     if (this->possible_bidirect_stream) {
         static int handle_st = ::open(this->device_playback.data(), O_RDWR);
         this->handle         = handle_st;
     } else
         switch (this->mode) {
             default:
-            case audio_stream_mode::playback:
+            case stream_audio_mode::playback:
                 this->handle = ::open(this->device_playback.data(), O_RDONLY);
                 break;
-            case audio_stream_mode::capture:
+            case stream_audio_mode::capture:
                 this->handle = ::open(this->device_capture.data(), O_WRONLY);
                 break;
-            case audio_stream_mode::bidirect:
+            case stream_audio_mode::bidirect:
                 this->handle = ::open(this->device_playback.data(), O_RDWR);
                 break;
         }
@@ -54,7 +54,7 @@ template<audio_config _cfg>
 void sio_base_audio<_cfg>::pread(sio_base_audio::buffer_type::value_type *buffer) {
     if (poll(&pfd, 1, -1) == -1)
         sio_base_audio::template throw_error<
-            sio_base_audio::audio_stream_error::architectural_feature>(
+            sio_base_audio::stream_audio_error::architectural_feature>(
             "Error call of poll.");
     else if (!(pfd.revents & POLLIN)) {
         this->message("Audio stream is empty.");
@@ -63,13 +63,13 @@ void sio_base_audio<_cfg>::pread(sio_base_audio::buffer_type::value_type *buffer
 
     if (::read(handle, buffer, this->cfg.buffer_size) == -1)
         sio_base_audio::template throw_error<
-            sio_base_audio::audio_stream_error::error_reading>();
+            sio_base_audio::stream_audio_error::error_reading>();
 }
 template<audio_config _cfg>
 void sio_base_audio<_cfg>::pwrite(const sio_base_audio::buffer_type::value_type *buffer) {
     if (poll(&pfd, 1, -1) == -1)
         sio_base_audio::template throw_error<
-            sio_base_audio::audio_stream_error::architectural_feature>(
+            sio_base_audio::stream_audio_error::architectural_feature>(
             "Error call of poll.");
     else if (!(pfd.revents & POLLOUT)) {
         this->message("Audio stream is overheap.");
@@ -78,7 +78,7 @@ void sio_base_audio<_cfg>::pwrite(const sio_base_audio::buffer_type::value_type 
 
     if (::write(handle, buffer, this->cfg.buffer_size) == -1)
         sio_base_audio::template throw_error<
-            sio_base_audio::audio_stream_error::error_writing>();
+            sio_base_audio::stream_audio_error::error_writing>();
 }
 
 #endif

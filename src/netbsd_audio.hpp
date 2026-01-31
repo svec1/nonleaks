@@ -10,7 +10,7 @@
 template<audio_config _cfg>
 class audio : public sio_base_audio<_cfg> {
 public:
-    audio(audio_stream_mode _mode);
+    audio(stream_audio_mode _mode);
     ~audio() override;
 
 protected:
@@ -18,7 +18,7 @@ protected:
 };
 
 template<audio_config _cfg>
-audio<_cfg>::audio(audio_stream_mode _mode) : sio_base_audio<_cfg>(_mode) {
+audio<_cfg>::audio(stream_audio_mode _mode) : sio_base_audio<_cfg>(_mode) {
 }
 template<audio_config _cfg>
 audio<_cfg>::~audio() {
@@ -40,10 +40,10 @@ void audio<_cfg>::init_params() {
     ap.record.precision   = bits_per_sample;
 
     if (ioctl(handle, AUDIO_SETINFO, &ap) == -1)
-        audio::template throw_error<audio::audio_stream_error::failed_set_params>();
+        audio::template throw_error<audio::stream_audio_error::failed_set_params>();
 
     if (ioctl(handle, AUDIO_GETINFO, &ap) == -1)
-        audio::template throw_error<audio::audio_stream_error::failed_get_params>();
+        audio::template throw_error<audio::stream_audio_error::failed_get_params>();
 }
 
 #endif

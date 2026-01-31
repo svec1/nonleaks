@@ -7,9 +7,9 @@ using uuv_service = unix_udp_voice_service;
 static constexpr log_handler log_main{{}};
 
 struct vcu_config {
-    std::string_view    device;
-    asio::ip::port_type port;
-    uuv_service::ipv_t  addr;
+    std::string_view      device;
+    asio::ip::port_type   port;
+    uuv_service::ipv_type addr;
 };
 
 static void parse_options(vcu_config &cfg, int argc, char *argv[]) {

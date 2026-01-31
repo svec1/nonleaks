@@ -124,8 +124,7 @@ void audio<_cfg>::alsa_init_params(snd_pcm_t *&handle, snd_pcm_hw_params_t *&par
 template<audio_config _cfg>
 template<typename T, typename... Args>
 constexpr void audio<_cfg>::alsa_throw_if_error(T &&func, Args &&...args) {
-    static int ret;
-    if (ret = func(args...); ret < 0)
+    if (int ret = func(args...); ret < 0)
         audio::template throw_error<audio::stream_audio_error::architectural_feature>(
             "{}", snd_strerror(ret));
 }

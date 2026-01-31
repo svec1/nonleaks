@@ -250,6 +250,20 @@ public:
             throw runtime_error("Buffer overflow.");
         this->buffer[count_pushed++] = std::forward<_T>(el);
     }
+    template<typename _T>
+        requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
+    void emplace(monotonic_array::buffer_type::iterator it, _T &&el) {
+        if (count_pushed == monotonic_array::buffer_size)
+            throw runtime_error("Buffer overflow.");
+        else if (it == this->buffer.end())
+            throw runtime_error("Invalid access.");
+
+        for (auto it_tmp = this->end(); it_tmp >= it; --it_tmp)
+            std::swap(*it_tmp, *(it_tmp + 1));
+
+        *it = std::forward<_T>(el);
+        ++count_pushed;
+    }
     T pop_front() {
         if (count_pushed == 0)
             throw runtime_error("Invalid access.");
@@ -291,7 +305,7 @@ public:
     template<typename _T>
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push(_T &&el) {
-        this->buffer[back] = std::forward<T>(el);
+        this->buffer[back] = std::forward<_T>(el);
         back               = (back + 1) % ring_buffer::buffer_size;
 
         if (count_pushed < ring_buffer::buffer_size)
