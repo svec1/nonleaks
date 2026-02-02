@@ -1,3 +1,7 @@
 [submodule "opus"]
     path = thirdparty/opus
     url = https://github.com/xiph/opus.git
+
+[submodule "noise-c"]
+    path = thirdparty/noise-c
+    url = https://github.com/signalapp/noise-c.git

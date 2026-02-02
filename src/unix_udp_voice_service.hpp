@@ -8,9 +8,11 @@
 using namespace boost;
 
 template<std::size_t _max_stream_size>
+    requires(_max_stream_size != 0)
 struct voice_extention {
-    static constexpr std::size_t max_stream_size        = _max_stream_size;
-    static constexpr std::size_t max_count_contributers = 4;
+    static constexpr std::size_t max_stream_size              = _max_stream_size;
+    static constexpr std::size_t min_count_packets_for_handle = _max_stream_size / 2;
+    static constexpr std::size_t max_count_contributers       = 4;
 
 public:
     struct packet_t : public packet_native_t<stream_audio::encode_buffer_size> {
@@ -19,23 +21,27 @@ public:
         using uuid_type = openssl_context::buffer_type<uuid_size>;
 
     public:
-        std::int8_t rtp_meta_inf;
-
         // Payload type: (sample_rate + bitrate + (channels * 100)) / 1000;
         std::uint8_t  payload_type;
         std::uint16_t sequence_number;
         std::uint32_t ssrc;
 
         std::array<uuid_type, max_count_contributers> csrc;
+
+    public:
+        bool lost;
     };
     struct protocol_t : public protocol_native_t<packet_t, noheap::log_impl::create_owner(
                                                                "VOICE_PROTOCOL")> {
+        using jitter_buffer_type = noheap::jitter_buffer<packet_t, max_stream_size>;
+
     public:
         constexpr void prepare(packet_t                      &pckt,
                                protocol_t::callback_prepare_t callback) const override {
             static openssl_context ossl_ctx;
 
             if (!initialized) {
+                std::lock_guard lock(access_m);
                 uuid                  = ossl_ctx.get_random_bytes<packet_t::uuid_size>();
                 local_sequence_number = *reinterpret_cast<std::uint16_t *>(
                     ossl_ctx.get_random_bytes<sizeof(std::uint16_t)>().data());
@@ -46,7 +52,6 @@ public:
 
             ++local_sequence_number;
 
-            pckt.rtp_meta_inf = 2 | (1 << 4);
             pckt.payload_type = static_cast<int8_t>(
                 (stream_audio::default_base_audio::cfg.sample_rate
                  + stream_audio::default_base_audio::cfg.bitrate
@@ -54,52 +59,57 @@ public:
             pckt.sequence_number = local_sequence_number;
             pckt.ssrc            = 0;
             pckt.csrc[0]         = uuid;
+            pckt.lost            = false;
         }
         constexpr void handle(packet_t                     &pckt,
                               protocol_t::callback_handle_t callback) const override {
-            std::ssize_t diff =
-                jitter_buffer.size()
-                    ? pckt.sequence_number - (jitter_buffer.end() - 1)->sequence_number
-                    : 0;
-            if (diff < 0) {
-                auto it = jitter_buffer.end() + diff - 1;
-                if (it->buffer.empty())
-                    *it = pckt;
-                else
-                    jitter_buffer.emplace(it, pckt);
-            } else {
-                if (diff > 1) {
-                    count_lost_packets += diff;
-                    for (; diff > 0; --diff)
-                        jitter_buffer.push_back(packet_t{});
-                }
-                jitter_buffer.push_back(std::move(pckt));
+            {
+                std::lock_guard lock(access_m);
+                buffer.push(pckt);
             }
-            ++count_received_packets;
 
-            if (jitter_buffer.size() == max_stream_size)
+            if (buffer.size() == min_count_packets_for_handle)
                 filled = true;
+            else if (!buffer.size())
+                filled = false;
 
             if (filled)
-                callback(jitter_buffer.pop_front());
+                callback(buffer.pop());
         }
 
     public:
-        std::size_t get_loss_per_cent() const {
-            if (!count_received_packets)
-                return 0;
-            return count_lost_packets / count_received_packets;
+        float get_loss_per_cent() const {
+            std::size_t count_pushed_packets;
+            std::size_t count_lost_packets;
+
+            {
+                std::lock_guard lock(access_m);
+                count_pushed_packets = buffer.get_count_pushed_packets();
+                count_lost_packets   = buffer.get_count_lost_packets();
+            }
+
+            float loss_per_cent =
+                static_cast<float>(count_lost_packets - last_count_lost_packets)
+                / (count_pushed_packets - last_count_pushed_packets);
+
+            last_count_pushed_packets = count_pushed_packets;
+            last_count_lost_packets   = count_lost_packets;
+
+            return loss_per_cent;
         }
 
     private:
-        mutable bool                         filled                 = false;
-        mutable bool                         initialized            = false;
-        mutable std::size_t                  count_lost_packets     = 0;
-        mutable std::size_t                  count_received_packets = 0;
+        mutable std::mutex access_m;
+
+        mutable bool                         filled      = false;
+        mutable bool                         initialized = false;
         mutable std::uint32_t                local_sequence_number;
         mutable typename packet_t::uuid_type uuid;
 
-        mutable noheap::monotonic_array<packet_t, max_stream_size> jitter_buffer;
+        mutable jitter_buffer_type buffer;
+
+        mutable std::size_t last_count_lost_packets   = 0;
+        mutable std::size_t last_count_pushed_packets = 0;
     };
 
 public:
@@ -110,7 +120,7 @@ public:
         using packet = action::packet;
 
     public:
-        action() : running(true), filled(0) {
+        action() {
             in_stream  = std::async(std::launch::async, [this] {
                 try {
                     while (running.load()) {
@@ -131,16 +141,20 @@ public:
             out_stream = std::async(std::launch::async, [this] {
                 try {
                     while (running.load()) {
-                        std::size_t current_out_stream_size;
-
                         typename packet::packet_type::buffer_type buffer_tmp;
+
+                        std::size_t current_out_stream_size;
+                        bool        lost = true;
+
                         {
                             std::lock_guard lock(out_stream_m);
                             current_out_stream_size = out_stream_buffer.size();
-                            buffer_tmp              = out_stream_buffer.pop();
+                            if (auto el = out_stream_buffer.pop(); el.has_value()) {
+                                buffer_tmp = el.value();
+                                lost       = false;
+                            }
                         }
-                        io_audio.write(buffer_tmp,
-                                       current_out_stream_size && buffer_tmp.empty());
+                        io_audio.write(buffer_tmp, lost);
                     }
                 } catch (...) {
                     running.store(false);
@@ -168,8 +182,12 @@ public:
             check_running();
 
             std::lock_guard lock(out_stream_m);
-            out_stream_buffer.push(pckt.buffer);
+            out_stream_buffer.push(pckt.lost ? std::nullopt
+                                             : std::make_optional(pckt.buffer));
         }
+
+    public:
+        bool get_running() { return running.load(); }
 
     private:
         void check_running() {
@@ -189,13 +207,15 @@ public:
     private:
         std::mutex               in_stream_m, out_stream_m;
         std::future<void>        in_stream, out_stream;
-        std::atomic<bool>        running;
-        std::atomic<std::size_t> filled;
+        std::atomic<bool>        running = true;
+        std::atomic<std::size_t> filled  = 0;
 
         stream_audio io_audio;
 
         noheap::ring_buffer<typename packet::buffer_type, max_stream_size>
-            in_stream_buffer, out_stream_buffer;
+            in_stream_buffer;
+        noheap::ring_buffer<std::optional<typename packet::buffer_type>, max_stream_size>
+            out_stream_buffer;
     };
 };
 
@@ -237,6 +257,22 @@ void unix_udp_voice_service::run(const ipv_type &addr) {
 
             io.run();
         });
+
+        const auto &prt      = packet::get_protocol();
+        auto        begin_ms = get_now_ms();
+        float       loss_avg = 0;
+
+        while (udp_stream.get_running()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (auto end_ms = get_now_ms(); end_ms - begin_ms >= 1000) {
+                float loss_current = prt.get_loss_per_cent();
+                if (loss_current > loss_avg)
+                    log.to_console("Packet loss: {:.2f}%", loss_current);
+
+                loss_avg = (loss_current + loss_avg) / 2;
+                begin_ms = end_ms;
+            }
+        }
 
         if (voice_handler.valid())
             voice_handler.get();

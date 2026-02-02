@@ -26,7 +26,7 @@ public:
 
 public:
     encode_buffer_type   encode(const noencode_buffer_type &buffer);
-    noencode_buffer_type decode(const encode_buffer_type &buffer, bool lost);
+    noencode_buffer_type decode(const encode_buffer_type &buffer, bool _lost);
 
     std::size_t get_bitrate() const;
 
@@ -55,6 +55,8 @@ coder_audio<_cfg>::coder_audio() {
     if (error)
         throw noheap::runtime_error(buffer_owner, "Failed to init decoder.");
 
+    opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(1));
+    opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(10));
     opus_encoder_ctl(enc, OPUS_SET_BITRATE(cfg.bitrate));
     opus_decoder_ctl(dec, OPUS_SET_BITRATE(cfg.bitrate));
 }
@@ -74,13 +76,21 @@ coder_audio<_cfg>::encode_buffer_type
 }
 template<audio_config _cfg>
 coder_audio<_cfg>::noencode_buffer_type
-    coder_audio<_cfg>::decode(const encode_buffer_type &buffer, bool lost) {
-    noencode_buffer_type buffer_tmp{};
-    std::ssize_t         count_frames = opus_decode(
-        dec, lost ? NULL : reinterpret_cast<const std::uint8_t *>(buffer.data()),
-        encode_buffer_size, reinterpret_cast<opus_int16 *>(buffer_tmp.data()),
-        cfg.period_size, 0);
+    coder_audio<_cfg>::decode(const encode_buffer_type &buffer, bool _lost) {
+    static bool lost = false;
 
+    noencode_buffer_type buffer_tmp{};
+    std::ssize_t         count_frames;
+
+    count_frames = opus_decode(
+        dec, _lost ? NULL : reinterpret_cast<const std::uint8_t *>(buffer.data()),
+        encode_buffer_size, reinterpret_cast<opus_int16 *>(buffer_tmp.data()),
+        cfg.period_size, lost);
+
+    if (lost)
+        lost = false;
+    if (_lost)
+        lost = true;
     if (count_frames == -1)
         throw noheap::runtime_error(buffer_owner, "Failed to decode buffer of samples.");
 

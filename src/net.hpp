@@ -121,7 +121,7 @@ public:
     }
 
 public:
-    static constexpr protocol_type &get_protocol() { return prt; }
+    static constexpr const protocol_type &get_protocol() { return prt; }
 
 private:
     static constexpr protocol_type prt{};

@@ -210,7 +210,7 @@ public:
 template<typename T, std::size_t _buffer_size>
 class monotonic_array : public basic_array<T, _buffer_size> {
 public:
-    constexpr monotonic_array() {}
+    constexpr monotonic_array() = default;
     monotonic_array(monotonic_array &&array) {
         std::swap(this->buffer, array.buffer);
         count_pushed = array.count_pushed;
@@ -334,8 +334,68 @@ private:
     std::size_t back = 0, front = 0, count_pushed = 0;
 };
 
-namespace pmr {
+template<typename T, std::size_t _buffer_size>
+    requires std::same_as<decltype(T{}.sequence_number), std::uint16_t>
+class jitter_buffer : private monotonic_array<T, _buffer_size> {
+public:
+    constexpr jitter_buffer() = default;
 
+public:
+    template<typename _T>
+        requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
+    void push(_T &&el) {
+        std::ssize_t diff =
+            this->size() ? el.sequence_number - (this->end() - 1)->sequence_number : 1;
+        if (diff < 0) {
+            auto it = this->end() + diff - 1;
+            if (std::abs(diff) >= this->size()) {
+                pop_if_full();
+                this->emplace(this->begin(), std::forward<_T>(el));
+            } else {
+                if (it->buffer.empty())
+                    *it = el;
+                else {
+                    pop_if_full();
+                    this->emplace(it, std::forward<_T>(el));
+                }
+            }
+        } else {
+            pop_if_full();
+            if (diff > 1) {
+                T pckt;
+                pckt.lost = true;
+                count_lost_packets += diff - 1;
+                for (; diff > 1; --diff) {
+                    this->push_back(pckt);
+                    pop_if_full();
+                }
+            }
+            this->push_back(std::forward<T>(el));
+        }
+        ++count_pushed_packets;
+    }
+
+    T pop() { return this->pop_front(); }
+
+public:
+    std::size_t size() const { return monotonic_array<T, _buffer_size>::size(); }
+    bool        full() const { return this->size() == this->buffer_size; }
+
+    std::size_t get_count_pushed_packets() const { return count_pushed_packets; }
+    std::size_t get_count_lost_packets() const { return count_lost_packets; }
+
+private:
+    void pop_if_full() {
+        if (this->full())
+            this->pop();
+    }
+
+private:
+    std::size_t count_pushed_packets = 0;
+    std::size_t count_lost_packets   = 0;
+};
+
+namespace pmr {
     static constexpr std::size_t default_buffer_size = 1024;
 
     template<typename T>
