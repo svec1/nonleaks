@@ -335,7 +335,8 @@ private:
 };
 
 template<typename T, std::size_t _buffer_size>
-    requires std::same_as<decltype(T{}.sequence_number), std::uint16_t>
+    requires(std::same_as<decltype(T{}.sequence_number), std::uint16_t>
+             && std::same_as<decltype(T{}.lost), bool>)
 class jitter_buffer : private monotonic_array<T, _buffer_size> {
 public:
     constexpr jitter_buffer() = default;
