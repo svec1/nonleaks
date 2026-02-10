@@ -42,6 +42,28 @@ template<typename T>
 concept Buffer_bytes_type =
     std::same_as<T, buffer_bytes_type<sizeof(T), typename T::value_type>>;
 
+template<typename TReturn, typename TSource,
+         typename TReturn_pure = std::decay_t<TReturn>,
+         typename TSource_pure = std::decay_t<TSource>>
+    requires(
+        std::same_as<TReturn_pure,
+                     std::array<typename TReturn_pure::value_type, TReturn_pure{}.size()>>
+        && std::same_as<TSource_pure, std::array<typename TSource_pure::value_type,
+                                                 TSource_pure{}.size()>>)
+constexpr TReturn to_new_array(TSource &&array) {
+    TReturn                         array_tmp;
+    typename TSource_pure::iterator begin = array.begin();
+    typename TSource_pure::iterator end   = begin;
+
+    if constexpr (array.size() >= array_tmp.size())
+        end += array_tmp.size();
+    else
+        end += array.size();
+
+    std::copy(begin, end, array_tmp.begin());
+    return array_tmp;
+}
+
 class print_impl final {
 public:
     static constexpr std::size_t buffer_size = output_buffer_size;
@@ -205,7 +227,9 @@ public:
     constexpr const_array() = default;
 
 public:
-    const const_array::buffer_type &operator&() const & { return this->buffer; }
+    constexpr operator typename const_array::buffer_type &() const & noexcept {
+        return this->buffer;
+    }
 };
 template<typename T, std::size_t _buffer_size>
 class monotonic_array : public basic_array<T, _buffer_size> {
@@ -250,9 +274,9 @@ public:
             throw runtime_error("Buffer overflow.");
         this->buffer[count_pushed++] = std::forward<_T>(el);
     }
-    template<typename _T>
-        requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
-    void emplace(monotonic_array::buffer_type::iterator it, _T &&el) {
+    template<typename... Args>
+        requires std::constructible_from<std::decay_t<T>, Args...>
+    void emplace(monotonic_array::buffer_type::iterator it, Args &&...args) {
         if (count_pushed == monotonic_array::buffer_size)
             throw runtime_error("Buffer overflow.");
         else if (it == this->buffer.end())
@@ -261,7 +285,7 @@ public:
         for (auto it_tmp = this->end(); it_tmp >= it; --it_tmp)
             std::swap(*it_tmp, *(it_tmp + 1));
 
-        *it = std::forward<_T>(el);
+        *it = T{std::forward<Args>(args)...};
         ++count_pushed;
     }
     T pop_front() {
@@ -335,55 +359,82 @@ private:
 };
 
 template<typename T, std::size_t _buffer_size>
-    requires(std::same_as<decltype(T{}.sequence_number), std::uint16_t>
-             && std::same_as<decltype(T{}.lost), bool>)
-class jitter_buffer : private monotonic_array<T, _buffer_size> {
+class jitter_buffer
+    : private monotonic_array<std::tuple<T, std::uint16_t, bool>, _buffer_size> {
+public:
+    using value_type = jitter_buffer::value_type;
+
+    static constexpr std::size_t element_index         = 0;
+    static constexpr std::size_t sequence_number_index = 1;
+    static constexpr std::size_t lost_index            = 2;
+
+    using element_type         = std::tuple_element_t<element_index, value_type>;
+    using sequence_number_type = std::tuple_element_t<sequence_number_index, value_type>;
+    using lost_type            = std::tuple_element_t<lost_index, value_type>;
+
+    using pop_type = std::pair<element_type, lost_type>;
+
 public:
     constexpr jitter_buffer() = default;
 
 public:
     template<typename _T>
-        requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
-    void push(_T &&el) {
+        requires std::same_as<std::decay_t<_T>, element_type>
+    void push(_T &&el, sequence_number_type sequence_number) {
         std::ssize_t diff =
-            this->size() ? el.sequence_number - (this->end() - 1)->sequence_number : 1;
+            this->size()
+                ? sequence_number - std::get<sequence_number_index>(*(this->end() - 1))
+                : 1;
         if (diff < 0) {
             auto it = this->end() + diff - 1;
             if (std::abs(diff) >= this->size()) {
                 pop_if_full();
-                this->emplace(this->begin(), std::forward<_T>(el));
+                this->emplace(this->begin(), std::forward<_T>(el), sequence_number,
+                              false);
             } else {
-                if (it->buffer.empty())
-                    *it = el;
+                if (std::get<lost_index>(*it))
+                    std::get<element_index>(*it) = el;
                 else {
                     pop_if_full();
-                    this->emplace(it, std::forward<_T>(el));
+                    this->emplace(it, std::forward<_T>(el), sequence_number, false);
                 }
             }
         } else {
             pop_if_full();
             if (diff > 1) {
-                T pckt;
-                pckt.lost = true;
-                count_lost_packets += diff - 1;
+                T el_tmp;
+
+                sequence_number_type current_sequence_number =
+                    std::get<sequence_number_index>(*this->end());
+                count_lost_elements += diff - 1;
                 for (; diff > 1; --diff) {
-                    this->push_back(pckt);
+                    ++current_sequence_number;
+
+                    this->push_back(
+                        std::make_tuple(el_tmp, current_sequence_number, true));
                     pop_if_full();
                 }
             }
-            this->push_back(std::forward<T>(el));
+            this->push_back(std::make_tuple(std::forward<T>(el), sequence_number, false));
         }
-        ++count_pushed_packets;
+        ++count_pushed_elements;
     }
 
-    T pop() { return this->pop_front(); }
+    pop_type pop() {
+        if (!this->size())
+            return std::make_tuple(element_type{}, true);
+
+        auto tuple_element = this->pop_front();
+        return std::make_tuple(std::move(std::get<element_index>(tuple_element)),
+                               std::get<lost_index>(tuple_element));
+    }
 
 public:
-    std::size_t size() const { return monotonic_array<T, _buffer_size>::size(); }
+    std::size_t get_count_elements() const { return this->size(); }
     bool        full() const { return this->size() == this->buffer_size; }
 
-    std::size_t get_count_pushed_packets() const { return count_pushed_packets; }
-    std::size_t get_count_lost_packets() const { return count_lost_packets; }
+    std::size_t get_count_pushed_elements() const { return count_pushed_elements; }
+    std::size_t get_count_lost_elements() const { return count_lost_elements; }
 
 private:
     void pop_if_full() {
@@ -392,170 +443,9 @@ private:
     }
 
 private:
-    std::size_t count_pushed_packets = 0;
-    std::size_t count_lost_packets   = 0;
+    std::size_t count_pushed_elements = 0;
+    std::size_t count_lost_elements   = 0;
 };
-
-namespace pmr {
-    static constexpr std::size_t default_buffer_size = 1024;
-
-    template<typename T>
-    concept buffer_resouce_static =
-        std::derived_from<T, std::pmr::memory_resource>
-        && std::same_as<T, decltype(T{std::declval<char *>(), std::size_t{}})>;
-
-    static constexpr std::size_t
-        calculate_number_bytes_for_alignment(std::ptrdiff_t ptr, std::size_t alignment) {
-        return (ptr + alignment - 1) & ~(alignment - 1) - ptr;
-    }
-
-    class monotonic_buffer_resource_static final : public std::pmr::memory_resource {
-    public:
-        monotonic_buffer_resource_static(char *_buffer, std::size_t _buffer_size)
-            : buffer(_buffer), buffer_size(_buffer_size) {
-            if (buffer == nullptr)
-                throw runtime_error("Invalid buffer.");
-        }
-
-    protected:
-        void *do_allocate(std::size_t bytes, std::size_t alignment) override {
-            offset += bytes
-                      + calculate_number_bytes_for_alignment(
-                          reinterpret_cast<std::size_t>(buffer + offset), alignment);
-
-            if (offset >= buffer_size)
-                throw runtime_error("The allocator buffer is full: {} bytes were "
-                                    "allocated. Required to allocate: {} bytes.",
-                                    buffer_size, bytes);
-            return buffer + offset - bytes;
-        }
-        void do_deallocate(void *p, std::size_t bytes, std::size_t alignment) override {}
-        bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override {
-            try {
-                if (dynamic_cast<decltype(this)>(&other)->buffer == this->buffer)
-                    return true;
-            } catch (...) {
-            }
-            return false;
-        }
-
-    private:
-        char       *buffer;
-        std::size_t buffer_size, offset = 0;
-    };
-
-    template<std::size_t _max_count_areas>
-    class synchronized_pool_resource_static final : public std::pmr::memory_resource {
-    public:
-        static constexpr std::size_t max_count_areas = _max_count_areas;
-
-    public:
-        synchronized_pool_resource_static(char *_buffer, std::size_t _buffer_size)
-            : buffer(_buffer), buffer_size(_buffer_size),
-              area_size(buffer_size / max_count_areas) {
-            if (buffer == nullptr || area_size == 0)
-                throw runtime_error("Invalid buffer.");
-        }
-
-    protected:
-        void *do_allocate(std::size_t bytes, std::size_t alignment) override {
-            std::lock_guard<std::mutex> lock(m);
-
-            std::size_t area_it    = 0;
-            std::size_t free_bytes = 0;
-            for (std::size_t i = 0; i < areas.size(); ++i) {
-                if (free_bytes >= bytes)
-                    break;
-
-                if (!areas[i]) {
-                    if (!free_bytes)
-                        area_it = i;
-                    free_bytes += area_size;
-                } else
-                    free_bytes = 0;
-            }
-            if (free_bytes < bytes)
-                throw runtime_error(
-                    "The allocator buffer is full: {} "
-                    "bytes were allocated. Required to allocate: {} bytes.",
-                    buffer_size, bytes);
-
-            std::for_each(areas.begin() + area_it,
-                          areas.begin() + (area_it * area_size + free_bytes) / area_size,
-                          [](bool &area_busy) { area_busy = true; });
-
-            buffer += area_it * area_size;
-            return buffer
-                   + calculate_number_bytes_for_alignment(
-                       reinterpret_cast<std::size_t>(buffer), alignment);
-        }
-        void do_deallocate(void *area, std::size_t bytes,
-                           std::size_t alignment) override {
-            std::lock_guard<std::mutex> lock(m);
-            std::size_t                 area_it = (reinterpret_cast<std::size_t>(area)
-                                   - reinterpret_cast<std::size_t>(buffer - alignment))
-                                  / area_size;
-            while (area_it < max_count_areas && bytes > 0) {
-                areas[area_it++] = true;
-                bytes -= area_size;
-            }
-        }
-        bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override {
-            try {
-                if (dynamic_cast<decltype(this)>(&other)->buffer == this->buffer)
-                    return true;
-            } catch (...) {
-            }
-            return false;
-        }
-
-    private:
-        char             *buffer;
-        const std::size_t buffer_size, area_size;
-
-        std::array<bool, max_count_areas> areas{};
-        std::mutex                        m;
-    };
-
-    template<typename TContainer, std::size_t _buffer_size,
-             buffer_resouce_static _buffer_resource_type>
-    struct basic_container {
-        static constexpr std::size_t buffer_size = _buffer_size;
-
-        using container_type       = TContainer;
-        using buffer_resource_type = _buffer_resource_type;
-
-    public:
-        container_type       &operator*() { return data; }
-        const container_type &operator*() const { return data; }
-        container_type       *operator->() { return &data; }
-        const container_type *operator->() const { return &data; }
-
-    private:
-        buffer_bytes_type<buffer_size> buffer{};
-        buffer_resource_type           buffer_r{buffer.data(), buffer_size};
-        std::pmr::polymorphic_allocator<typename TContainer::value_type> allocator{
-            &buffer_r};
-
-    private:
-        TContainer data{allocator};
-    };
-
-    template<typename T, std::size_t _buffer_size = default_buffer_size,
-             buffer_resouce_static _buffer_resource_t = monotonic_buffer_resource_static>
-    struct vector
-        : public basic_container<std::pmr::vector<T>, _buffer_size, _buffer_resource_t> {
-    };
-    template<typename T, std::size_t _buffer_size = default_buffer_size,
-             buffer_resouce_static _buffer_resource_t =
-                 synchronized_pool_resource_static<_buffer_size / sizeof(T)>>
-    struct deque
-        : public basic_container<std::pmr::deque<T>, _buffer_size, _buffer_resource_t> {};
-
-    template<typename T, std::size_t max_count>
-    using queue = std::queue<T, deque<T, max_count>>;
-
-} // namespace pmr
 
 } // namespace noheap
 

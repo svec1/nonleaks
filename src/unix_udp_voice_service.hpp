@@ -1,238 +1,56 @@
 #ifndef UDP_VOICE_SERVICE_HPP
 #define UDP_VOICE_SERVICE_HPP
 
+#include <boost/json.hpp>
+#include <boost/json/src.hpp>
+
 #include "crypt.hpp"
 #include "net.hpp"
-#include "stream_audio.hpp"
+#include "protocol.hpp"
 
 using namespace boost;
-
-template<std::size_t _max_stream_size>
-    requires(_max_stream_size != 0)
-struct voice_extention {
-    static constexpr std::size_t max_stream_size              = _max_stream_size;
-    static constexpr std::size_t min_count_packets_for_handle = _max_stream_size / 2;
-    static constexpr std::size_t max_count_contributers       = 4;
-
-public:
-    struct packet_t : public packet_native_t<stream_audio::encode_buffer_size> {
-        static constexpr std::size_t uuid_size = 8;
-
-        using uuid_type = openssl_context::buffer_type<uuid_size>;
-
-    public:
-        // Payload type: (sample_rate + bitrate + (channels * 100)) / 1000;
-        std::uint8_t  payload_type;
-        std::uint16_t sequence_number;
-        std::uint32_t ssrc;
-
-        std::array<uuid_type, max_count_contributers> csrc;
-
-    public:
-        bool lost;
-    };
-    struct protocol_t : public protocol_native_t<packet_t, noheap::log_impl::create_owner(
-                                                               "VOICE_PROTOCOL")> {
-        using jitter_buffer_type = noheap::jitter_buffer<packet_t, max_stream_size>;
-
-    public:
-        constexpr void prepare(packet_t                      &pckt,
-                               protocol_t::callback_prepare_t callback) const override {
-            static openssl_context ossl_ctx;
-
-            if (!initialized) {
-                std::lock_guard lock(access_m);
-                uuid                  = ossl_ctx.get_random_bytes<packet_t::uuid_size>();
-                local_sequence_number = *reinterpret_cast<std::uint16_t *>(
-                    ossl_ctx.get_random_bytes<sizeof(std::uint16_t)>().data());
-
-                initialized = true;
-            }
-            callback(pckt);
-
-            ++local_sequence_number;
-
-            pckt.payload_type = static_cast<int8_t>(
-                (stream_audio::default_base_audio::cfg.sample_rate
-                 + stream_audio::default_base_audio::cfg.bitrate
-                 + (stream_audio::default_base_audio::cfg.channels * 100) / 1000));
-            pckt.sequence_number = local_sequence_number;
-            pckt.ssrc            = 0;
-            pckt.csrc[0]         = uuid;
-            pckt.lost            = false;
-        }
-        constexpr void handle(packet_t                     &pckt,
-                              protocol_t::callback_handle_t callback) const override {
-            {
-                std::lock_guard lock(access_m);
-                buffer.push(pckt);
-            }
-
-            if (buffer.size() == min_count_packets_for_handle)
-                filled = true;
-            else if (!buffer.size())
-                filled = false;
-
-            if (filled)
-                callback(buffer.pop());
-        }
-
-    public:
-        float get_loss_per_cent() const {
-            std::size_t count_pushed_packets;
-            std::size_t count_lost_packets;
-
-            {
-                std::lock_guard lock(access_m);
-                count_pushed_packets = buffer.get_count_pushed_packets();
-                count_lost_packets   = buffer.get_count_lost_packets();
-            }
-
-            float loss_per_cent =
-                static_cast<float>(count_lost_packets - last_count_lost_packets)
-                / (count_pushed_packets - last_count_pushed_packets);
-
-            last_count_pushed_packets = count_pushed_packets;
-            last_count_lost_packets   = count_lost_packets;
-
-            return loss_per_cent;
-        }
-
-    private:
-        mutable std::mutex access_m;
-
-        mutable bool                         filled      = false;
-        mutable bool                         initialized = false;
-        mutable std::uint32_t                local_sequence_number;
-        mutable typename packet_t::uuid_type uuid;
-
-        mutable jitter_buffer_type buffer;
-
-        mutable std::size_t last_count_lost_packets   = 0;
-        mutable std::size_t last_count_pushed_packets = 0;
-    };
-
-public:
-    using packet = packet<packet_t, protocol_t>;
-
-public:
-    struct action : public ::action<packet> {
-        using packet = action::packet;
-
-    public:
-        action() {
-            in_stream  = std::async(std::launch::async, [this] {
-                try {
-                    while (running.load()) {
-                        typename stream_audio::encode_buffer_type buffer_tmp =
-                            io_audio.read();
-                        {
-                            std::lock_guard lock(in_stream_m);
-                            in_stream_buffer.push(buffer_tmp);
-                        }
-                        filled.fetch_add(1);
-                        filled.notify_one();
-                    }
-                } catch (...) {
-                    running.store(false);
-                    throw;
-                }
-            });
-            out_stream = std::async(std::launch::async, [this] {
-                try {
-                    while (running.load()) {
-                        typename packet::packet_type::buffer_type buffer_tmp;
-
-                        std::size_t current_out_stream_size;
-                        bool        lost = true;
-
-                        {
-                            std::lock_guard lock(out_stream_m);
-                            current_out_stream_size = out_stream_buffer.size();
-                            if (auto el = out_stream_buffer.pop(); el.has_value()) {
-                                buffer_tmp = el.value();
-                                lost       = false;
-                            }
-                        }
-                        io_audio.write(buffer_tmp, lost);
-                    }
-                } catch (...) {
-                    running.store(false);
-                    throw;
-                }
-            });
-        }
-        ~action() {
-            running.store(false);
-            wait_stopping();
-        }
-
-    public:
-        constexpr void init_packet(packet::packet_t &pckt) override {
-            check_running();
-
-            if (!filled.load())
-                filled.wait(0);
-            filled.fetch_sub(1);
-
-            std::lock_guard lock(in_stream_m);
-            pckt.buffer = in_stream_buffer.pop();
-        }
-        constexpr void process_packet(packet::packet_t &&pckt) override {
-            check_running();
-
-            std::lock_guard lock(out_stream_m);
-            out_stream_buffer.push(pckt.lost ? std::nullopt
-                                             : std::make_optional(pckt.buffer));
-        }
-
-    public:
-        bool get_running() { return running.load(); }
-
-    private:
-        void check_running() {
-            if (running.load())
-                return;
-
-            wait_stopping();
-        }
-
-        void wait_stopping() {
-            if (in_stream.valid())
-                in_stream.get();
-            if (out_stream.valid())
-                out_stream.get();
-        }
-
-    private:
-        std::mutex               in_stream_m, out_stream_m;
-        std::future<void>        in_stream, out_stream;
-        std::atomic<bool>        running = true;
-        std::atomic<std::size_t> filled  = 0;
-
-        stream_audio io_audio;
-
-        noheap::ring_buffer<typename packet::buffer_type, max_stream_size>
-            in_stream_buffer;
-        noheap::ring_buffer<std::optional<typename packet::buffer_type>, max_stream_size>
-            out_stream_buffer;
-    };
-};
 
 class unix_udp_voice_service {
 public:
     static constexpr ipv v = ipv::v4;
+    using address_type     = ipv_address_type<v>;
 
-    using voice_extention_d = voice_extention<64>;
-    using udp_stream_type   = net_stream_udp<typename voice_extention_d::action, v>;
-    using packet            = voice_extention_d::packet;
-    using ipv_type          = udp_stream_type::ipv_type;
+    static constexpr std::size_t max_size_config = 4096;
+    using buffer_config_type = noheap::buffer_bytes_type<max_size_config>;
+
+    template<ntn_relation relation_type>
+    using noise_handshake_packet = protocol::noise_handshake_packet<relation_type>;
+    using payload_packet         = protocol::payload_packet;
+
+    template<ntn_relation relation_type>
+    using stream_tcp_type =
+        net_stream_tcp<protocol::noise_handshake_action<relation_type>, v>;
+    using stream_udp_type = net_stream_udp<protocol::payload_action, v>;
+
+private:
+    struct config_type {
+        noise_pattern pattern;
+        noise_role    role;
+
+        buffer_key_type<max_size_key> local_private_key;
+        buffer_key_type<max_size_key> local_public_key;
+        buffer_key_type<max_size_key> remote_public_key;
+        buffer_key_type<max_size_key> pre_shared_key;
+    };
 
 public:
-    unix_udp_voice_service(asio::ip::port_type port);
+    unix_udp_voice_service(address_type &&_addr, asio::ip::port_type _port);
 
-public:
-    void run(const ipv_type &addr);
+    void run();
+    void configurate(buffer_config_type &&buffer);
+
+private:
+    template<Packet packet, typename TUDPStream>
+    static void run_payload_consume(TUDPStream &udp_stream, address_type addr);
+
+    template<ntn_relation relation_type>
+    static void noise_handshake(stream_tcp_type<relation_type> &tcp_stream,
+                                config_type                   &&config);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -240,47 +58,192 @@ private:
     static constexpr log_handler log{buffer_owner};
 
 private:
-    asio::io_context io;
-    udp_stream_type  udp_stream;
+    config_type config;
+
+    asio::io_context    io;
+    address_type        addr;
+    asio::ip::port_type tcp_port;
+    asio::ip::port_type udp_port;
+    stream_udp_type     udp_stream;
+    openssl_context     ossl_ctx;
 };
 
-unix_udp_voice_service::unix_udp_voice_service(asio::ip::port_type port)
-    : udp_stream(io, port) {
+unix_udp_voice_service::unix_udp_voice_service(address_type      &&_addr,
+                                               asio::ip::port_type _port)
+    : addr(_addr), tcp_port(_port), udp_port(tcp_port + 1), udp_stream(io, udp_port) {
 }
-void unix_udp_voice_service::run(const ipv_type &addr) {
+template<ntn_relation relation_type>
+void unix_udp_voice_service::noise_handshake(stream_tcp_type<relation_type> &tcp_stream,
+                                             config_type                   &&config) {
+    using packet_type        = noise_handshake_packet<relation_type>;
+    using noise_context_type = protocol::noise_context_type<relation_type>;
+    packet_type pckt;
+
+    auto &noise_ctx =
+        noise_handshake_packet<ntn_relation::PTU>::get_protocol().get_noise_context();
+
+    noise_ctx.set_local_keypair(
+        {noheap::to_new_array<typename noise_context_type::dh_key_type>(
+             config.local_private_key),
+         noheap::to_new_array<typename noise_context_type::dh_key_type>(
+             config.local_public_key)});
+    noise_ctx.set_remote_public_key(
+        noheap::to_new_array<typename noise_context_type::dh_key_type>(
+            config.remote_public_key));
+    noise_ctx.set_pre_shared_key(
+        noheap::to_new_array<typename noise_context_type::pre_shared_key_type>(
+            config.pre_shared_key));
+
+    noise_ctx.set_prologue({});
+    noise_ctx.start();
+    while (true) {
+        auto action = noise_ctx.get_action();
+        if (action == noise_action::WRITE_MESSAGE)
+            tcp_stream.template send<decltype(pckt)>(pckt);
+        else if (action == noise_action::READ_MESSAGE)
+            tcp_stream.template receive<decltype(pckt)>(pckt);
+        else
+            break;
+    }
+    noise_ctx.stop();
+}
+void unix_udp_voice_service::run() {
     try {
-        std::future<void> voice_handler = std::async(std::launch::async, [&] {
-            packet pckt_for_receiving{}, pckt_for_sending{};
+        if (is_ptu(config.pattern)) {
+            const auto &payload_prt = payload_packet::get_protocol();
 
-            udp_stream.register_send_handler<0>(pckt_for_sending, addr);
-            udp_stream.register_receive_handler(pckt_for_receiving);
+            noise_context<ntn_relation::PTU>::cipher_state cipher_state;
 
-            io.run();
-        });
+            {
+                const auto &noise_handshake_prt =
+                    noise_handshake_packet<ntn_relation::PTU>::get_protocol();
 
-        const auto &prt      = packet::get_protocol();
-        auto        begin_ms = get_now_ms();
-        float       loss_avg = 0;
+                noise_context<ntn_relation::PTU>   noise_ctx(config.pattern, config.role);
+                stream_tcp_type<ntn_relation::PTU> tcp_stream(io, {addr, tcp_port});
 
-        while (udp_stream.get_running()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (auto end_ms = get_now_ms(); end_ms - begin_ms >= 1000) {
-                float loss_current = prt.get_loss_per_cent();
-                if (loss_current > loss_avg)
-                    log.to_console("Packet loss: {:.2f}%", loss_current);
+                noise_handshake_prt.set_noise_context(noise_ctx);
+                noise_handshake<ntn_relation::PTU>(tcp_stream, std::move(config));
 
-                loss_avg = (loss_current + loss_avg) / 2;
-                begin_ms = end_ms;
+                cipher_state = noise_ctx.get_cipher_state();
+                payload_prt.set_noise_cipher_state(cipher_state);
             }
-        }
 
-        if (voice_handler.valid())
-            voice_handler.get();
+            payload_prt.set_local_sequence_number(
+                *reinterpret_cast<decltype(payload_packet{}->payload.sequence_number) *>(
+                    ossl_ctx
+                        .get_random_bytes<sizeof(
+                            payload_packet{}->payload.sequence_number)>()
+                        .data()));
+            payload_prt.set_uuid(ossl_ctx.get_random_bytes<
+                                 protocol::payload_protocol_type::uuid_type{}.size()>());
+
+            log.to_all("Payload consumer is executing...");
+            std::future<void> payload_consumer =
+                std::async(std::launch::async,
+                           unix_udp_voice_service::run_payload_consume<payload_packet,
+                                                                       stream_udp_type>,
+                           std::ref(udp_stream), addr);
+            if (payload_consumer.valid())
+                payload_consumer.get();
+        }
 
     } catch (noheap::runtime_error &excp) {
         if (!excp.has_setting_owner())
             excp.set_owner(buffer_owner);
         throw;
+    }
+}
+
+template<Packet packet, typename TUDPStream>
+void unix_udp_voice_service::run_payload_consume(TUDPStream  &udp_stream,
+                                                 address_type addr) {
+    std::future<void> payload_handler = std::async(std::launch::async, [&] {
+        packet pckt_for_receiving{}, pckt_for_sending{};
+
+        udp_stream.template register_send_handler<0>(pckt_for_sending, addr);
+        udp_stream.register_receive_handler(pckt_for_receiving);
+
+        udp_stream.io_context_run();
+    });
+
+    const auto &payload_prt = payload_packet::get_protocol();
+    auto        begin_ms    = get_now_ms();
+    float       loss_avg    = 0;
+
+    while (payload_handler.valid()
+           && payload_handler.wait_for(std::chrono::milliseconds(100))
+                  != std::future_status::ready) {
+        if (auto end_ms = get_now_ms(); end_ms - begin_ms >= 1000) {
+            float loss_current = payload_prt.get_loss_per_cent();
+            if (loss_current > loss_avg)
+                log.to_all("Packet loss: {:.2f}%", loss_current);
+
+            loss_avg = (loss_current + loss_avg) / 2;
+            begin_ms = end_ms;
+        }
+    }
+
+    if (payload_handler.valid())
+        payload_handler.get();
+}
+void unix_udp_voice_service::configurate(buffer_config_type &&buffer) {
+    log.to_all("Setting of configurate.");
+
+    {
+        constexpr std::string_view role_string          = "role";
+        constexpr std::string_view pattern_string       = "pattern";
+        constexpr std::string_view local_private_string = "local_private_key";
+        constexpr std::string_view local_public_string  = "local_public_key";
+        constexpr std::string_view remote_public_string = "remote_public_key";
+        constexpr std::string_view pre_shared_string    = "pre_shared_key";
+
+        noheap::buffer_bytes_type<8192, std::uint8_t> json_buffer_tmp;
+        noheap::buffer_bytes_type<1024>               buffer_tmp;
+
+        json::static_resource json_mr(json_buffer_tmp.data(), json_buffer_tmp.size());
+
+        json::value data(&json_mr);
+        data = json::parse(buffer.data(), &json_mr);
+
+        const auto &get_bytes_key = [&](const std::string_view field_name, auto &buffer) {
+            auto value_p = data.try_at(field_name);
+            if (!value_p)
+                return;
+
+            auto string_p = value_p->try_as_string();
+            if (string_p) {
+                if (string_p->size() >= buffer.size())
+                    throw noheap::runtime_error(
+                        buffer_owner,
+                        "The specified key field has a large size:\n\t{}: {}",
+                        buffer.size(), field_name, *string_p);
+                std::copy(string_p->begin(), string_p->end(), buffer.begin());
+            } else
+                throw noheap::runtime_error(buffer_owner,
+                                            "Field of key must be a string.");
+        };
+
+        auto value_p = data.try_at(role_string);
+        if (!value_p)
+            throw noheap::runtime_error(buffer_owner, "Field of role not specified.");
+        auto role_p = value_p->try_as_string();
+        if (!role_p)
+            throw noheap::runtime_error(buffer_owner, "Field of role must be a string.");
+
+        value_p = data.try_at(pattern_string);
+        if (!value_p)
+            throw noheap::runtime_error(buffer_owner, "Field of pattern  not specified.");
+        auto pattern_p = value_p->try_as_string();
+        if (!pattern_p)
+            throw noheap::runtime_error(buffer_owner,
+                                        "Field of pattern must be a string.");
+
+        config.pattern = get_noise_pattern(*pattern_p);
+        config.role    = get_noise_role(*role_p);
+        get_bytes_key(local_private_string, config.local_private_key);
+        get_bytes_key(local_public_string, config.local_public_key);
+        get_bytes_key(remote_public_string, config.remote_public_key);
+        get_bytes_key(pre_shared_string, config.pre_shared_key);
     }
 }
 

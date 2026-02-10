@@ -14,6 +14,7 @@ public:
 
     using ca_type            = coder_audio<default_base_audio::cfg>;
     using encode_buffer_type = ca_type::encode_buffer_type;
+    using buffer_type        = encode_buffer_type;
 
 public:
     static constexpr std::size_t encode_buffer_size = ca_type::encode_buffer_size;

@@ -9,17 +9,61 @@ file(GLOB_RECURSE SRC_FILES src/*.cpp)
 
 project(${UUV})
 add_executable(${UUV} ${SRC_FILES})
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g -pthread")
-target_include_directories(${UUV} PRIVATE ${LIBBOOST_PATH} src/)
-
-
+        
 find_package(OpenSSL)	
-target_link_libraries(${UUV} PRIVATE OpenSSL::Crypto)
-
 set(OPUS_BUILD_SHARED_LIBRARY ON)
 add_subdirectory(thirdparty/opus)	
-target_link_libraries(${UUV} PRIVATE Opus::opus)
+
+set(NOISE_C_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/noise-c)
+
+file(GLOB_RECURSE NOISE_C_SOURCE_FILES ${NOISE_C_DIR}/src/*)
+set(NOISE_C_INCLUDE_DIR ${NOISE_C_DIR}/include)
+set(
+    NOISE_C_LIBS
+    ${NOISE_C_DIR}/src/protocol/libnoiseprotocol.a
+    ${NOISE_C_DIR}/src/keys/libnoisekeys.a
+)
+
+add_custom_command(
+    OUTPUT ./configure
+    WORKING_DIRECTORY ${NOISE_C_DIR}
+    COMMAND ${NOISE_C_DIR}/autogen.sh > /dev/null
+    VERBATIM
+)
+
+set(noise-c_configure_output src/Makefile src/protocol/Makefile src/keys/Makefile)
+add_custom_command(
+    OUTPUT ${noise-c_configure_output}  
+    WORKING_DIRECTORY ${NOISE_C_DIR}
+    COMMAND ./configure > /dev/null
+    VERBATIM
+)
+
+add_custom_target(
+    noise-c
+    WORKING_DIRECTORY ${NOISE_C_DIR}
+    COMMAND make > /dev/null
+    DEPENDS ${noise-c_configure_output}
+)
+add_dependencies(${UUV} noise-c)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -pthread")
+
+target_include_directories(
+    ${UUV}
+    PUBLIC 
+    src/
+    ${LIBBOOST_PATH}
+    ${OpenSSL_INCLUDE_DIRS}
+    ${NOISE_C_INCLUDE_DIR}
+)
+target_link_libraries(
+    ${UUV}
+    PRIVATE
+    OpenSSL::Crypto
+    Opus::opus
+    ${NOISE_C_LIBS}
+)
 
 if(SNDIO AND (LINUX OR BSD))
 	find_library(LIBSNDIO NAMES sndio)

@@ -1,3 +1,5 @@
+#include <fstream>
+
 #include "unix_udp_voice_service.hpp"
 
 using namespace boost;
@@ -5,11 +7,12 @@ using dba         = stream_audio::default_base_audio;
 using uuv_service = unix_udp_voice_service;
 
 static constexpr log_handler log_main{{}};
+static constexpr auto        name_config_file = "uuv_config.json";
 
 struct vcu_config {
-    std::string_view      device;
-    asio::ip::port_type   port;
-    uuv_service::ipv_type addr;
+    std::string_view          device;
+    asio::ip::port_type       port;
+    uuv_service::address_type addr;
 };
 
 static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
@@ -81,6 +84,24 @@ static void parse_options(vcu_config &cfg, int argc, char *argv[]) {
     }
 }
 
+uuv_service::buffer_config_type read_config() {
+    uuv_service::buffer_config_type buffer_tmp;
+
+    std::ifstream config(name_config_file);
+    if (!config.is_open())
+        throw noheap::runtime_error("The config file does not exist.");
+
+    config.seekg(0, std::ios_base::end);
+    std::size_t size = config.tellg();
+
+    if (size > buffer_tmp.size())
+        throw noheap::runtime_error("The config file is too big.");
+
+    config.seekg(0, std::ios_base::beg);
+    config.read(buffer_tmp.data(), size);
+    return buffer_tmp;
+}
+
 void print_cfg(const vcu_config &cfg) {
     using ca_type = stream_audio::ca_type;
 
@@ -105,8 +126,9 @@ int main(int argc, char *argv[]) {
         dba::device_playback = cfg.device;
         dba::device_capture  = cfg.device;
 
-        unix_udp_voice_service vsc(cfg.port);
-        vsc.run(cfg.addr);
+        uuv_service vsc(std::move(cfg.addr), cfg.port);
+        vsc.configurate(read_config());
+        vsc.run();
 
     } catch (noheap::runtime_error &excp) {
         log_main.exception_to_all(excp);
