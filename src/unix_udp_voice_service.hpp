@@ -80,6 +80,12 @@ void unix_udp_voice_service::noise_handshake(stream_tcp_type &tcp_stream,
     auto &noise_ctx =
         noise_handshake_packet<ntn_relation::PTU>::get_protocol().get_noise_context();
 
+    auto noise_name_id = noise_ctx.get_name_id();
+    log.to_all("Starting noise handshake: {}",
+               std::string_view(noise_name_id.data(), noise_name_id.size()));
+
+    noise_ctx.set_prologue({});
+
     noise_ctx.set_local_keypair(
         {noheap::to_new_array<typename noise_context_type::dh_key_type>(
              config.local_private_key),
@@ -91,10 +97,6 @@ void unix_udp_voice_service::noise_handshake(stream_tcp_type &tcp_stream,
     noise_ctx.set_pre_shared_key(
         noheap::to_new_array<typename noise_context_type::pre_shared_key_type>(
             config.pre_shared_key));
-
-    auto noise_name_id = noise_ctx.get_name_id();
-    log.to_all("Starting noise handshake: {}",
-               std::string_view(noise_name_id.data(), noise_name_id.size()));
 
     noise_ctx.start();
     while (true) {

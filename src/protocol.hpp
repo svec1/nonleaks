@@ -171,8 +171,7 @@ public:
                 0);
             noise_ctx_p->set_handshake_message();
 
-            std::string_view str((char *) pckt.data() + pckt.size() - 8, 8);
-            this->log.to_console("Was sent: {}", str);
+            this->log.to_console("Was sent: {}", std::span<std::int8_t>(pckt.data(), 49));
 
         } catch (noheap::runtime_error &excp) {
             excp.set_owner(buffer_owner);
@@ -184,8 +183,8 @@ public:
         check_noise_action(noise_action::READ_MESSAGE);
 
         try {
-            std::string_view str((char *) pckt.data() + pckt.size() - 8, 8);
-            this->log.to_console("Was received: {}", str);
+            this->log.to_console("Was received: {}",
+                                 std::span<std::int8_t>(pckt.data(), 49));
 
             noise_ctx_p->get_handshake_buffer().set_buffer(
                 std::span<std::uint8_t>(reinterpret_cast<std::uint8_t *>(pckt.data()),
