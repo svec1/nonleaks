@@ -40,20 +40,19 @@ using buffer_bytes_type = std::array<T, buffer_size>;
 
 template<typename T>
 concept Buffer_bytes_type =
-    std::same_as<T, buffer_bytes_type<sizeof(T), typename T::value_type>>;
+    std::same_as<std::decay_t<T>,
+                 buffer_bytes_type<sizeof(T), typename std::decay_t<T>::value_type>>;
 
-template<typename TReturn, typename TSource,
-         typename TReturn_pure = std::decay_t<TReturn>,
-         typename TSource_pure = std::decay_t<TSource>>
-    requires(
-        std::same_as<TReturn_pure,
-                     std::array<typename TReturn_pure::value_type, TReturn_pure{}.size()>>
-        && std::same_as<TSource_pure, std::array<typename TSource_pure::value_type,
-                                                 TSource_pure{}.size()>>)
+template<typename T>
+concept Buffer =
+    std::same_as<std::decay_t<T>,
+                 std::array<typename std::decay_t<T>::value_type, sizeof(T)>>;
+
+template<Buffer TReturn, Buffer TSource>
 constexpr TReturn to_new_array(TSource &&array) {
-    TReturn                         array_tmp;
-    typename TSource_pure::iterator begin = array.begin();
-    typename TSource_pure::iterator end   = begin;
+    TReturn                                  array_tmp;
+    typename std::decay_t<TSource>::iterator begin = array.begin();
+    typename std::decay_t<TSource>::iterator end   = begin;
 
     if (array.size() >= array_tmp.size())
         end += array_tmp.size();
@@ -62,6 +61,18 @@ constexpr TReturn to_new_array(TSource &&array) {
 
     std::copy(begin, end, array_tmp.begin());
     return array_tmp;
+}
+
+template<Buffer TReturn, Buffer TSource>
+constexpr TReturn to_hex_string(TSource &&buffer) {
+    TReturn buffer_tmp{};
+
+    auto it = buffer_tmp.begin();
+
+    for (auto ch : buffer)
+        it = std::format_to_n(it, 2, "{:X}", ch).out;
+
+    return buffer_tmp;
 }
 
 class print_impl final {
