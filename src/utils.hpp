@@ -67,7 +67,7 @@ constexpr TReturn to_new_buffer(TSource &&buffer) {
     auto    begin = buffer.begin();
     auto    end   = begin;
 
-    if constexpr (buffer.size() >= buffer_tmp.size())
+    if (buffer.size() >= buffer_tmp.size())
         end += buffer_tmp.size();
     else
         end += buffer.size();

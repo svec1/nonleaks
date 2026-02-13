@@ -12,7 +12,6 @@ project(${UUV})
 add_executable(${UUV} ${SRC_FILES})
         
 set(OPUS_BUILD_SHARED_LIBRARY ON)
-set(OPUS_USE_ALLOCA ON)
 add_subdirectory(thirdparty/opus)	
 find_package(OpenSSL)	
 

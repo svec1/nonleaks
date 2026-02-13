@@ -74,7 +74,7 @@ public:
 
             cipher_state->input_buffer.set(
                 {reinterpret_cast<std::uint8_t *>(pckt.extention_data()),
-                 pckt.extention_size()},
+                 packet_type::extention_data_type::payload_data_size},
                 pckt.extention_size());
             cipher_state->encrypt();
 
