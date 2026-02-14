@@ -281,7 +281,7 @@ noise_context<_relation_type>::cipher_state::cipher_state(cipher_state &&handle)
     *this = std::move(handle);
 }
 template<ntn_relation _relation_type>
-noise_context<_relation_type>::cipher_state::cipher_state &
+noise_context<_relation_type>::cipher_state &
     noise_context<_relation_type>::cipher_state::operator=(cipher_state &&handle) {
     this->randstate           = std::move(handle.randstate);
     this->send_cipher         = std::move(handle.send_cipher);
@@ -299,14 +299,17 @@ template<ntn_relation _relation_type>
 void noise_context<_relation_type>::cipher_state::encrypt() {
     check_completed_handshake();
     std::size_t ret;
-    if ((ret = noise_randstate_pad(randstate, output_buffer->data, output_buffer->size,
-                                   output_buffer->max_size
+
+    /*
+    if ((ret = noise_randstate_pad(randstate, input_buffer->data, input_buffer->size,
+                                   input_buffer->max_size
                                        - noise_cipherstate_get_mac_length(send_cipher),
                                    NOISE_PADDING_RANDOM))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to pad");
+    */
 
-    if ((ret = noise_cipherstate_encrypt(send_cipher, &*output_buffer))
+    if ((ret = noise_cipherstate_encrypt(send_cipher, &*input_buffer))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to encrypt");
 }
@@ -314,7 +317,7 @@ template<ntn_relation _relation_type>
 void noise_context<_relation_type>::cipher_state::decrypt() {
     check_completed_handshake();
     std::size_t ret;
-    if ((ret = noise_cipherstate_decrypt(send_cipher, &*input_buffer))
+    if ((ret = noise_cipherstate_decrypt(receive_cipher, &*output_buffer))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to decrypt");
 }

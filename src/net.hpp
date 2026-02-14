@@ -53,7 +53,7 @@ public:
     }
     constexpr std::size_t ad_size() const noexcept { return _ad_size; }
     constexpr std::size_t extention_size() const noexcept {
-        return sizeof(_extention_data);
+        return sizeof(extention_data_type);
     }
 
 public:

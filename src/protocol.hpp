@@ -70,7 +70,10 @@ public:
             callback(pckt);
 
             pckt->payload.sequence_number = local_sequence_number++;
-            pckt->payload.uuids[0]        = uuid;
+            pckt->payload.payload_type =
+                packet_type::extention_data_type::payload_data_type::local_payload_value;
+            pckt->payload.uuids[0] = uuid;
+            pckt->payload.lost     = false;
 
             cipher_state->input_buffer.set(
                 {reinterpret_cast<std::uint8_t *>(pckt.extention_data()),
@@ -95,6 +98,7 @@ public:
                 {reinterpret_cast<std::uint8_t *>(pckt.extention_data()),
                  pckt.extention_size()},
                 noheap::represent_bytes<payload_size_ad_type>(pckt.payload_ad));
+
             cipher_state->decrypt();
 
             buffer.push(pckt, pckt->payload.sequence_number);
@@ -183,11 +187,6 @@ public:
 
             pckt.payload_ad = noheap::to_buffer<packet_type::ad_type>(
                 noise_ctx_p->get_handshake_buffer().get().size);
-
-            noheap::println("Send: {}",
-                            std::span(pckt.extention_data(),
-                                      noheap::represent_bytes<payload_size_ad_type>(
-                                          pckt.payload_ad)));
         } catch (noheap::runtime_error &excp) {
             excp.set_owner(buffer_owner);
             throw;
@@ -196,11 +195,6 @@ public:
     constexpr void handle(packet_type &pckt, buffer_address_type addr,
                           callback_handle_type callback) const override {
         check_noise_action(noise_action::READ_MESSAGE);
-        noheap::println(
-            "Receive: {}",
-            std::span(pckt.extention_data(),
-                      noheap::represent_bytes<payload_size_ad_type>(pckt.payload_ad)));
-
         try {
             noise_ctx_p->get_handshake_buffer().set(
                 std::span<std::uint8_t>(

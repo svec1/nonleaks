@@ -32,7 +32,7 @@ constexpr std::size_t get_now_ms() {
 
 namespace noheap {
 
-static constexpr std::size_t output_buffer_size = 512;
+static constexpr std::size_t output_buffer_size = 1024;
 
 template<std::size_t buffer_size, typename T = char>
     requires std::is_integral<T>::value

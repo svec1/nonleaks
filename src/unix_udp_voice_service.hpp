@@ -140,7 +140,8 @@ void unix_udp_voice_service::run() {
             {
                 stream_tcp_type tcp_stream(io, tcp_port);
 
-                if (!tcp_stream.wait_connect({addr, tcp_port})) {
+                if (config.role == noise_role::RESPONDER
+                    || !tcp_stream.wait_connect({addr, tcp_port})) {
                     tcp_stream.close();
 
                     acceptor_type ac(io, tcp_port);
