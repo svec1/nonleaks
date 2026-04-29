@@ -58,6 +58,7 @@ private:
     typename noise_context_type::cipher_state header_cipher_state_sender;
     typename noise_context_type::cipher_state header_cipher_state_receiver;
     typename noise_context_type::random_state random_state;
+    noise_context_type::hash_state            hash_state;
 
     noise::noise_role                role;
     noise::prologue_extention_type   ext;
@@ -326,9 +327,8 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     xor_public_key_with_buffer(ephemeral_obfs_key);
 
     // Gets 32 bytes-hash of public key
-    auto public_key_hash =
-        noheap::clip_buffer<32, 0>(typename noise_context_type::hash_state{}.get_hash(
-            {public_key.data(), public_key.size()}));
+    auto public_key_hash = noheap::clip_buffer<32, 0>(
+        hash_state.get_hash({public_key.data(), public_key.size()}));
 
     // Generates keystream
     noise::buffer_type<noheap::buffer_size<noise_context_type::dh_key_type> * 3
@@ -366,11 +366,10 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
 void essu::noise_handshake_context::generate_posthandshake_unique_values() {
     // Generates unique values
     std::decay_t<decltype(handshake_hash)> output_tmp;
-    typename noise_context_type::hash_state{}.hkdf(
-        {handshake_hash.data(), handshake_hash.size()},
-        {handshake_payload.data(), handshake_payload.size()},
-        {output_tmp.data(), output_tmp.size()},
-        {unique_value.data(), unique_value.size()});
+    hash_state.hkdf({handshake_hash.data(), handshake_hash.size()},
+                    {handshake_payload.data(), handshake_payload.size()},
+                    {output_tmp.data(), output_tmp.size()},
+                    {unique_value.data(), unique_value.size()});
 
     // Generates keystream - the header obfuscation key
     noise::buffer_type<noheap::buffer_size<noise_context_type::dh_key_type> * 2

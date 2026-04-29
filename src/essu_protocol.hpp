@@ -15,6 +15,7 @@ public:
 
 private:
     void reset_state() {
+        id                            = 0;
         batches_sent_number           = 0;
         batches_received_number       = 0;
         sender_units_number           = 0;
@@ -22,9 +23,8 @@ private:
         sender_key_iteration_number   = 0;
         receiver_key_iteration_number = 0;
         undecrypted_batch_number      = 0;
-
-        was_sent_retry     = false;
-        was_received_retry = false;
+        was_sent_retry                = false;
+        was_received_retry            = false;
     }
 
 public:
@@ -33,17 +33,15 @@ public:
 
 private:
     noise_handshake_context handshake_context;
-
-    std::uint64_t batches_sent_number;
-    std::uint64_t batches_received_number;
-    std::uint64_t sender_units_number;
-    std::uint64_t receiver_units_number;
-    std::uint64_t sender_key_iteration_number;
-    std::uint64_t receiver_key_iteration_number;
-    std::uint64_t undecrypted_batch_number;
-
-    bool was_sent_retry     = false;
-    bool was_received_retry = false;
+    std::uint64_t           batches_sent_number;
+    std::uint64_t           batches_received_number;
+    std::uint64_t           sender_units_number;
+    std::uint64_t           receiver_units_number;
+    std::uint64_t           sender_key_iteration_number;
+    std::uint64_t           receiver_key_iteration_number;
+    std::uint64_t           undecrypted_batch_number;
+    bool                    was_sent_retry;
+    bool                    was_received_retry;
 
     std::uint64_t handshake_number = 0;
 };
@@ -80,6 +78,7 @@ private:
     session_info_s_type::iterator
          find_session_info(network::buffer_address_type addr) const;
     void check_protocol_compliance(bool                      handshake_complete,
+                                   std::uint64_t             handshake_number,
                                    unit_type::unit_type_enum batch_type,
                                    unit_type::unit_type_enum payload_unit_two_type) const;
     noise::buffer_type<header_data_size> derive_header_obfs_key(
@@ -128,8 +127,8 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
         session_info.was_sent_retry = true;
     }
 
-    check_protocol_compliance(handshake_already_complete, pckt->units[0].header.type,
-                              pckt->units[1].header.type);
+    check_protocol_compliance(handshake_already_complete, session_info.handshake_number,
+                              pckt->units[0].header.type, pckt->units[1].header.type);
 
     for (std::uint64_t i = 0; i < pckt->units.size(); ++i) {
         unit_type &unit = pckt->units[i];
@@ -309,9 +308,8 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
     ++session_info.receiver_units_number;
     ++session_info.batches_received_number;
 
-    if (pckt->units[2].header.type == unit_type::unit_type_enum::retry)
-        session_info.was_received_retry = true;
-    else if (pckt->units[2].header.type == unit_type::unit_type_enum::retry_ok)
+    if (pckt->units[2].header.type == unit_type::unit_type_enum::retry
+        || pckt->units[2].header.type == unit_type::unit_type_enum::retry_ok)
         session_info.was_received_retry = true;
 
     // Calls callback(action) to handle packet
@@ -361,6 +359,7 @@ void essu::protocol_type::stop_handshake(session_info_type &session_info) const 
         session_info.sender_units_number   = value2;
         session_info.receiver_units_number = value1;
     }
+
     ++session_info.handshake_number;
 }
 noise::noise_role
@@ -389,13 +388,17 @@ essu::protocol_type::session_info_s_type::iterator
                         [&](auto el) { return el->addr == addr; });
 }
 void essu::protocol_type::check_protocol_compliance(
-    bool handshake_complete, unit_type::unit_type_enum batch_type,
+    bool handshake_complete, std::uint64_t handshake_number,
+    unit_type::unit_type_enum batch_type,
     unit_type::unit_type_enum payload_unit_two_type) const {
     if (handshake_complete
         && (batch_type != unit_type::unit_type_enum::data
             || (payload_unit_two_type != unit_type::unit_type_enum::data
                 && payload_unit_two_type != unit_type::unit_type_enum::dummy)))
         this->log.throw_exception("Expected payload unit.");
+
+    if (handshake_number > max_available_handshakes_number)
+        this->log.throw_exception("Limit of handshakes has been reached.");
 }
 noise::buffer_type<essu::header_data_size> essu::protocol_type::derive_header_obfs_key(
     typename noise_context_type::cipher_state &header_cipher_state,

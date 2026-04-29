@@ -27,6 +27,7 @@ public:
     void terminate();
 
     bool is_running() const;
+    bool is_failed() const;
 
 private:
     void send(const essu::session_info_type &session_info);
@@ -47,6 +48,7 @@ private:
     const std::string_view hex_remote_addr{buffer_hex_remote_addr};
 
     std::atomic<bool>        running = false;
+    std::atomic<bool>        failed  = false;
     std::atomic<std::size_t> io_stop = 0; // 2 - is full stop
 };
 } // namespace essu
@@ -85,6 +87,7 @@ void essu::session<TStream>::establish_connection() {
 
         log.to_all("Number of handshake: {}", protocol.get_handshake_number(info));
     } catch (const noheap::runtime_error &excp) {
+        failed.store(true);
         log.throw_exception<noheap::runtime_error>("Failed to establish connection [{}]",
                                                    excp.what());
     }
@@ -95,11 +98,18 @@ void essu::session<TStream>::register_connection() {
     const auto async_stream_op = [this](auto &&stream_op) {
         scope_guard io_stop_increment([this] {
             ++this->io_stop;
+            if (this->io_stop == 2)
+                this->running.store(false);
+
             this->io_stop.notify_all();
-            this->running.store(false);
         });
 
-        stream_op();
+        try {
+            stream_op();
+        } catch (...) {
+            this->failed.store(true);
+            throw;
+        }
     };
 
     io_stop.store(0);
@@ -111,12 +121,13 @@ void essu::session<TStream>::register_connection() {
                        && essu::wrapper_packet_type::get_protocol().can_send_packet(info))
                        this->send(info);
                }));
-    asio::post(
-        stream.get_executor(), std::bind(async_stream_op, [this] {
-            while (this->running.load()
-                   && essu::wrapper_packet_type::get_protocol().can_receive_packet(info))
-                this->receive(info);
-        }));
+    asio::post(stream.get_executor(), std::bind(async_stream_op, [this] {
+                   while (this->running.load()
+                          && essu::wrapper_packet_type::get_protocol().can_receive_packet(
+                              info)) {
+                       this->receive(info);
+                   }
+               }));
 }
 template<network::Udp_stream TStream>
 void essu::session<TStream>::wait() {
@@ -130,6 +141,10 @@ void essu::session<TStream>::terminate() {
 template<network::Udp_stream TStream>
 bool essu::session<TStream>::is_running() const {
     return running.load();
+}
+template<network::Udp_stream TStream>
+bool essu::session<TStream>::is_failed() const {
+    return failed.load();
 }
 
 template<network::Udp_stream TStream>

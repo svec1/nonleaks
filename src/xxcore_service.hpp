@@ -107,12 +107,12 @@ void xxcore_service::run() {
                                   {config.local_private_key, config.local_public_key},
                                   config.remote_public_key);
 
-        while (true) {
+        do {
             session_test.establish_connection();
             session_test.register_connection();
 
             session_test.wait();
-        }
+        } while (!session_test.is_failed());
     }
 
     for (auto &worker : workers)
