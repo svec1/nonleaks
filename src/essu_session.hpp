@@ -30,8 +30,10 @@ public:
     bool is_failed() const;
 
 private:
-    void send(const essu::session_info_type &session_info);
-    void receive(const session_info_type &session_info);
+    void send();
+    void receive();
+
+    void self_post(std::function<bool()> func);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -79,9 +81,9 @@ void essu::session<TStream>::establish_connection() {
         while ((action = protocol.get_handshake_action(info))
                != noise::noise_action::SPLIT) {
             if (action == noise::noise_action::WRITE_MESSAGE)
-                send(info);
+                send();
             else if (action == noise::noise_action::READ_MESSAGE)
-                receive(info);
+                receive();
         }
         protocol.stop_handshake(info);
 
@@ -95,39 +97,56 @@ void essu::session<TStream>::establish_connection() {
 
 template<network::Udp_stream TStream>
 void essu::session<TStream>::register_connection() {
-    const auto async_stream_op = [this](auto &&stream_op) {
-        scope_guard io_stop_increment([this] {
+    if (!essu::wrapper_packet_type::get_protocol().can_send_packet(info)
+        || !essu::wrapper_packet_type::get_protocol().can_receive_packet(info))
+        log.throw_exception<noheap::runtime_error>("Failed to register connection.");
+
+    io_stop.store(0);
+    running.store(true);
+
+    self_post([this] {
+        try {
+            this->send();
+        } catch (...) {
+            this->failed.store(true);
+            throw;
+        }
+        return this->running.load()
+               && essu::wrapper_packet_type::get_protocol().can_send_packet(this->info);
+    });
+    self_post([this] {
+        try {
+            this->receive();
+        } catch (...) {
+            this->failed.store(true);
+            throw;
+        }
+        return this->running.load()
+               && essu::wrapper_packet_type::get_protocol().can_receive_packet(
+                   this->info);
+    });
+}
+template<network::Udp_stream TStream>
+void essu::session<TStream>::self_post(std::function<bool()> func) {
+    asio::post(stream.get_executor(), [this, func] {
+        const auto stop_post = [this] {
             ++this->io_stop;
             if (this->io_stop == 2)
                 this->running.store(false);
 
             this->io_stop.notify_all();
-        });
+        };
 
         try {
-            stream_op();
+            if (func())
+                this->self_post(func);
+            else
+                stop_post();
         } catch (...) {
-            this->failed.store(true);
+            stop_post();
             throw;
         }
-    };
-
-    io_stop.store(0);
-    running.store(true);
-
-    asio::post(stream.get_executor(), std::bind(async_stream_op, [this] {
-                   while (
-                       this->running.load()
-                       && essu::wrapper_packet_type::get_protocol().can_send_packet(info))
-                       this->send(info);
-               }));
-    asio::post(stream.get_executor(), std::bind(async_stream_op, [this] {
-                   while (this->running.load()
-                          && essu::wrapper_packet_type::get_protocol().can_receive_packet(
-                              info)) {
-                       this->receive(info);
-                   }
-               }));
+    });
 }
 template<network::Udp_stream TStream>
 void essu::session<TStream>::wait() {
@@ -148,15 +167,15 @@ bool essu::session<TStream>::is_failed() const {
 }
 
 template<network::Udp_stream TStream>
-void essu::session<TStream>::send(const session_info_type &session_info) {
+void essu::session<TStream>::send() {
     stream.template send_to<essu::wrapper_packet_type>(
-        TStream::get_address_object(session_info.addr));
+        TStream::get_address_object(info.addr));
 }
 
 template<network::Udp_stream TStream>
-void essu::session<TStream>::receive(const session_info_type &session_info) {
+void essu::session<TStream>::receive() {
     if (!stream.template receive_from<essu::wrapper_packet_type>(
-            TStream::get_address_object(session_info.addr)))
+            TStream::get_address_object(info.addr)))
         log.throw_exception<noheap::runtime_error>("Timeout has been reached.");
 }
 

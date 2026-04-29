@@ -41,7 +41,7 @@ private:
 
 class xxcore_service {
 public:
-    static constexpr std::size_t workers_number  = network::max_count_addresses;
+    static constexpr std::size_t workers_number  = network::max_count_addresses + 2;
     static constexpr std::size_t max_size_config = BOOST_JSON_STACK_BUFFER_SIZE;
     using buffer_config_type = noheap::buffer_type<char, max_size_config>;
 
