@@ -52,6 +52,8 @@ private:
     std::atomic<bool>        running = false;
     std::atomic<bool>        failed  = false;
     std::atomic<std::size_t> io_stop = 0; // 2 - is full stop
+
+    std::optional<noheap::runtime_error> excp;
 };
 } // namespace essu
 
@@ -130,10 +132,8 @@ template<network::Udp_stream TStream>
 void essu::session<TStream>::self_post(std::function<bool()> func) {
     asio::post(stream.get_executor(), [this, func] {
         const auto stop_post = [this] {
+            this->running.store(false);
             ++this->io_stop;
-            if (this->io_stop == 2)
-                this->running.store(false);
-
             this->io_stop.notify_all();
         };
 
@@ -142,6 +142,10 @@ void essu::session<TStream>::self_post(std::function<bool()> func) {
                 this->self_post(func);
             else
                 stop_post();
+        } catch (const noheap::runtime_error &_excp) {
+            if (!excp)
+                excp = _excp;
+            stop_post();
         } catch (...) {
             stop_post();
             throw;
@@ -152,6 +156,8 @@ template<network::Udp_stream TStream>
 void essu::session<TStream>::wait() {
     io_stop.wait(0);
     io_stop.wait(1);
+    if (excp)
+        throw *excp;
 }
 template<network::Udp_stream TStream>
 void essu::session<TStream>::terminate() {

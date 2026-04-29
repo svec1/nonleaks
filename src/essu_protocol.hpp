@@ -236,9 +236,9 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
 
     // Selects possible unit number
     std::uint64_t count_decrypted_units = 0;
-    for (; session_info.receiver_units_number
-           < session_info.receiver_units_number
-                 + batches_window_number * batch_units_number;
+    std::uint64_t available_batches_window_number =
+        session_info.receiver_units_number + batches_window_number * batch_units_number;
+    for (; session_info.receiver_units_number < available_batches_window_number;
          ++session_info.receiver_units_number) {
         // Generates header obfuscation key based on the possible_unit_number
         auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state,
