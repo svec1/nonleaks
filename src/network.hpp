@@ -252,9 +252,9 @@ private:
         noheap::ring_buffer<typename action_type::packet_type, max_buffered_packets>
             pckt_s;
     };
-    using receive_buffer =
+    using receive_buffer_type =
         noheap::monotonic_array<receive_buffer_of_address_type, max_count_addresses>;
-    using send_buffer =
+    using send_buffer_type =
         noheap::monotonic_array<send_buffer_of_address_type, max_count_addresses>;
 
 public:
@@ -312,8 +312,8 @@ private:
 
     port_type port;
 
-    send_buffer    send_buffer_packets;
-    receive_buffer receive_buffer_packets;
+    send_buffer_type    send_buffer;
+    receive_buffer_type receive_buffer;
 };
 
 template<Derived_from_action Action, ipv v>
@@ -338,23 +338,23 @@ udp_stream<Action, v>::~udp_stream() {
 
 template<Derived_from_action Action, ipv v>
 void udp_stream<Action, v>::register_async_send() {
-    // TODO: supporting pseudo proxy like an obfs4 or webtunnel
+    // TODO: supporting pseudo proxy such as obfs4 or webtunnel
     asio::post(socket.get_executor(), [this] {
         {
             // Waits for a signal from send_to that there is new packets for send
-            std::unique_lock<decltype(m_send)> m_send_lock{m_send};
+            std::unique_lock<decltype(m_send)> m_send_lock(m_send);
             cv_send.wait(m_send_lock, [this] {
                 if (!running.load())
                     return true;
 
-                for (auto &buffer_of_address : this->send_buffer_packets)
+                for (auto &buffer_of_address : this->send_buffer)
                     if (buffer_of_address.pckt_s.size())
                         return true;
                 return false;
             });
 
             system::error_code ec;
-            for (auto &buffer_of_address : send_buffer_packets) {
+            for (auto &buffer_of_address : send_buffer) {
                 while (buffer_of_address.pckt_s.size()) {
                     auto pckt = buffer_of_address.pckt_s.pop();
                     this->socket.send_to(
@@ -376,16 +376,20 @@ void udp_stream<Action, v>::register_async_receive() {
             this->handle_error(ec);
             auto remote_addr = this->get_address_object(receive_endpoint.address());
 
-            decltype(receive_buffer_packets.begin()) it;
+            // Find it of receive_buffer and checks that the address is registered
+            decltype(receive_buffer.begin()) it;
             if (it = std::find_if(
-                    receive_buffer_packets.begin(), receive_buffer_packets.end(),
+                    receive_buffer.begin(), receive_buffer.end(),
                     [&remote_addr](const auto &it) { return it.addr == remote_addr; });
-                it == receive_buffer_packets.end())
-                return;
+                it == receive_buffer.end()) {
+                if (receive_buffer.size() == max_count_addresses)
+                    return;
+                this->register_address(remote_addr);
+            }
 
             {
                 // Adds the packet to receive buffer
-                std::lock_guard<decltype(it->m)> m_receive_lock{it->m};
+                std::lock_guard<decltype(it->m)> m_receive_lock(it->m);
                 it->pckt_s.push(
                     buffered_received_packet_type{receive_pckt, get_now_ms()});
 
@@ -398,15 +402,16 @@ void udp_stream<Action, v>::register_async_receive() {
 }
 template<Derived_from_action Action, ipv v>
 void udp_stream<Action, v>::register_address(address_type addr) {
-    if (auto it = std::find_if(send_buffer_packets.begin(), send_buffer_packets.end(),
+    if (auto it = std::find_if(send_buffer.begin(), send_buffer.end(),
                                [&addr](const auto &it) { return it.addr == addr; });
-        it != send_buffer_packets.end())
+        it != send_buffer.end())
         log.throw_exception("Address [{}] has already been registered.",
                             this->get_address_bytes(addr));
-    send_buffer_packets.push_back(
-        typename decltype(send_buffer_packets)::value_type{addr});
-    receive_buffer_packets.push_back(
-        typename decltype(receive_buffer_packets)::value_type{addr});
+    else if (send_buffer.size() == max_count_addresses)
+        log.throw_exception("Limit of connections has been reached.");
+
+    send_buffer.push_back(typename decltype(send_buffer)::value_type{addr});
+    receive_buffer.push_back(typename decltype(receive_buffer)::value_type{addr});
 }
 
 template<Derived_from_action Action, ipv v>
@@ -419,16 +424,17 @@ void udp_stream<Action, v>::send_to(address_type addr) {
         pckt, this->get_address_bytes(this->get_address_object(addr)),
         std::bind(&Action::init_packet, &this->act, std::placeholders::_1));
 
-    decltype(this->send_buffer_packets.begin()) it;
-    if (it = std::find_if(send_buffer_packets.begin(), send_buffer_packets.end(),
+    // Find it of send_buffer and checks that the address is registered
+    decltype(this->send_buffer.begin()) it;
+    if (it = std::find_if(send_buffer.begin(), send_buffer.end(),
                           [&addr](const auto &it) { return it.addr == addr; });
-        it == send_buffer_packets.end())
+        it == send_buffer.end())
         log.throw_exception("Address [{}] is not registered.",
                             this->get_address_bytes(addr));
 
-    // Pushes sending packet to send buffer
+    // Pushes the packet to send_buffer
     {
-        std::lock_guard<decltype(m_send)> m_send_lock{m_send};
+        std::lock_guard<decltype(m_send)> m_send_lock(m_send);
         it->pckt_s.push(pckt);
 
         // Wakes the main loop of sending packets up(register_async_send)
@@ -441,16 +447,17 @@ template<Compatible_wrapper_packet_with_action<Action> TWrapper_packet>
 bool udp_stream<Action, v>::receive_from(address_type addr) {
     typename action_type::packet_type pckt;
 
-    decltype(this->receive_buffer_packets.begin()) it;
-    if (it = std::find_if(receive_buffer_packets.begin(), receive_buffer_packets.end(),
+    // Find it of receive_buffer and checks that the address is registered
+    decltype(this->receive_buffer.begin()) it;
+    if (it = std::find_if(receive_buffer.begin(), receive_buffer.end(),
                           [&addr](const auto &it) { return it.addr == addr; });
-        it == receive_buffer_packets.end())
+        it == receive_buffer.end())
         log.throw_exception("Address [{}] is not registered.",
                             this->get_address_bytes(addr));
 
     // Waits for a signal from register_async_receive that a packet was received
     {
-        std::unique_lock<decltype(it->m)> m_receive_lock{it->m};
+        std::unique_lock<decltype(it->m)> m_receive_lock(it->m);
         bool                              received_packet = false;
         if (!it->cv.wait_for(m_receive_lock, std::chrono::milliseconds(timeout_ms),
                              [&] {

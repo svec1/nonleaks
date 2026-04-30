@@ -158,6 +158,9 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
         fragmentation            = true;
         return;
     }
+    random_state.padding_buffer.set(
+        {payload_unit.buffer.data(), payload_unit.buffer.size()},
+        offset_noise_handshake_unit - noise_ctx.get_handshake_buffer().get().size);
 
     buffer_handshake_message    = {};
     offset_noise_handshake_unit = 0;
@@ -174,13 +177,13 @@ void essu::noise_handshake_context::process_packet(packet_type &&pckt) {
     std::uint64_t payload_size;
     if (status == status_enum::hs1
         && payload_unit.header.type == unit_type::unit_type_enum::session_request)
-        payload_size = unit_config_type::hs1_size;
+        payload_size = noise_config.get_hs1_size();
     else if (status == status_enum::hs2
              && payload_unit.header.type == unit_type::unit_type_enum::session_created)
-        payload_size = unit_config_type::hs2_size;
+        payload_size = noise_config.get_hs2_size();
     else if (status == status_enum::hs3
              && payload_unit.header.type == unit_type::unit_type_enum::session_confirmed)
-        payload_size = unit_config_type::hs3_size;
+        payload_size = noise_config.get_hs3_size();
     else
         this->log.throw_exception("Unexpected behaviour during the noise handshake.");
 
@@ -301,15 +304,22 @@ void essu::noise_handshake_context::check_noise_action(noise::noise_action expec
     if (action == noise::noise_action::FAILED)
         this->log.throw_exception("Failed to handshake.");
 
-    if (action == expected)
+    if (action == expected
+        || ((expected == noise::noise_action::WRITE_MESSAGE
+             || expected == noise::noise_action::READ_MESSAGE)
+            && fragmentation))
         return;
 
     if (action == noise::noise_action::WRITE_MESSAGE)
         this->log.throw_exception("Expected message to be sent.");
     else if (action == noise::noise_action::READ_MESSAGE)
         this->log.throw_exception("Expected message to be received.");
-    else
+    else if (action == noise::noise_action::SPLIT)
+        this->log.throw_exception("Expected to stop handshake.");
+    else if (action == noise::noise_action::COMPLETE)
         this->log.throw_exception("Handshake already completed.");
+    else if (action == noise::noise_action::NONE)
+        this->log.throw_exception("Action is not required.");
 }
 
 // Generates ephemeral header obfuscation key + ephmeral obfuscation key for hs1

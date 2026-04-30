@@ -136,9 +136,11 @@ void essu::session<TStream>::self_post(std::function<bool()> func) {
         } catch (const noheap::runtime_error &_excp) {
             if (!excp)
                 excp = _excp;
+            this->running.store(false);
             this->failed.store(true);
             stop_post();
         } catch (...) {
+            this->running.store(false);
             this->failed.store(true);
             stop_post();
             throw;

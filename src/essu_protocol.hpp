@@ -144,19 +144,15 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
             std::uint64_t payload_size;
             switch (unit.header.type) {
                 case unit_type::unit_type_enum::session_request:
-                    payload_size = unit_config_type::hs1_size;
-                    break;
                 case unit_type::unit_type_enum::session_created:
-                    payload_size = unit_config_type::hs2_size;
-                    break;
                 case unit_type::unit_type_enum::session_confirmed:
-                    payload_size = unit_config_type::hs3_size;
-                    break;
-                case unit_type::unit_type_enum::hole_punch:
-                    payload_size = 8;
+                    payload_size = unit.buffer.size();
                     break;
                 case unit_type::unit_type_enum::data:
                     payload_size = payload_data_size;
+                    break;
+                case unit_type::unit_type_enum::hole_punch:
+                    payload_size = 8;
                     break;
                 case unit_type::unit_type_enum::dummy:
                 case unit_type::unit_type_enum::retry:
@@ -171,7 +167,7 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
             random_state.padding_buffer.set(
                 {reinterpret_cast<noheap::rbyte *>(unit.buffer.data()),
                  unit.buffer.size()},
-                std::clamp<std::uint64_t>(payload_size, 0, unit.buffer.size()));
+                payload_size);
             random_state.pad();
         }
 

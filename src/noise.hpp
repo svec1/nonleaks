@@ -143,6 +143,41 @@ struct noise_context_config {
     static constexpr cipher_type   cipher  = _cipher;
     static constexpr hash_type     hash    = _hash;
 
+    static consteval std::size_t get_hs1_size() {
+        if constexpr (pattern == noise_pattern::XX)
+            return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
+        if constexpr (pattern == noise_pattern::XK)
+            return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
+        else if constexpr (pattern == noise_pattern::XX_HFS
+                           || pattern == noise_pattern::XK_HFS) {
+            return get_kem_key_size<ecdh>() + get_dh_key_size<ecdh>()
+                   + get_mac_size<cipher>() * 2;
+        }
+    }
+    static consteval std::size_t get_hs2_size() {
+        if constexpr (pattern == noise_pattern::XX)
+            return noise::get_dh_key_size<ecdh>() * 2 + get_mac_size<cipher>() * 2;
+        if constexpr (pattern == noise_pattern::XK)
+            return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
+        else if constexpr (pattern == noise_pattern::XX_HFS) {
+            return get_kem_cipher_text_size<ecdh>() + noise::get_dh_key_size<ecdh>() * 2
+                   + get_mac_size<cipher>() * 2 + 16;
+        } else if constexpr (pattern == noise_pattern::XK_HFS) {
+            return get_kem_cipher_text_size<ecdh>() + noise::get_dh_key_size<ecdh>()
+                   + get_mac_size<cipher>();
+        } else
+            static_assert(false, "Invalid noise context config.");
+    }
+    static consteval std::size_t get_hs3_size() {
+        if constexpr (pattern == noise_pattern::XX || pattern == noise_pattern::XK
+                      || pattern == noise_pattern::XX_HFS
+                      || pattern == noise_pattern::XK_HFS)
+            return noise::get_dh_key_size<ecdh>() + get_mac_size<cipher>() * 2
+                   + handshake_payload_size;
+        else
+            static_assert(false, "Invalid noise context config.");
+    }
+
 private:
     static_assert(noise::pattern_ecdh_is_compatible<pattern, ecdh>(),
                   "Noise pattern and ecdh type is not compatible.");

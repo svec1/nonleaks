@@ -14,31 +14,17 @@ constexpr std::size_t batch_units_number              = 4;
 constexpr std::size_t units_per_rekey_number          = 17;
 constexpr std::size_t batches_window_number           = 16;
 constexpr std::size_t max_undecrypted_batches_number  = 16;
-constexpr std::size_t max_available_batches_number    = 10;
+constexpr std::size_t max_available_batches_number    = 1000;
 constexpr std::size_t max_available_handshakes_number = 10000;
 constexpr std::size_t unit_size                       = packet_size / batch_units_number;
 constexpr std::size_t buffer_data_size                = unit_size - header_data_size;
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;
 
-struct unit_config_type {
-    static constexpr noise::noise_context_config<
-        noise::noise_pattern::XX, noise::ecdh_type::X25519, noise::cipher_type::AESGCM,
-        noise::hash_type::SHA3512>
-        noise_config;
-    using noise_context_type = noise::noise_context<noise_config>;
-
-    static constexpr std::size_t hs1_size =
-        noise::get_dh_key_size<noise_config.ecdh>() + noise_context_type::mac_size
-        + noise::get_kem_key_size<noise_config.ecdh>();
-    static constexpr std::size_t hs2_size =
-        noise::get_dh_key_size<noise_config.ecdh>() * 2 + noise_context_type::mac_size * 2
-        + noise::get_kem_cipher_text_size<noise_config.ecdh>();
-    static constexpr std::size_t hs3_size = noise::get_dh_key_size<noise_config.ecdh>()
-                                            + noise_context_type::mac_size * 2
-                                            + noise::handshake_payload_size;
-};
-
-using noise_context_type = unit_config_type::noise_context_type;
+static constexpr noise::noise_context_config<
+    noise::noise_pattern::XX_HFS, noise::ecdh_type::X25519_KYBER1024,
+    noise::cipher_type::AESGCM, noise::hash_type::SHA3512>
+    noise_config;
+using noise_context_type = noise::noise_context<noise_config>;
 
 // Transport unit
 struct unit_type {
@@ -70,7 +56,7 @@ public:
 
 public:
     static constexpr std::size_t buffer_size_without_mac =
-        buffer_data_size - noise::get_mac_size<unit_config_type::noise_config.cipher>();
+        buffer_data_size - noise::get_mac_size<noise_config.cipher>();
 
     static_assert(sizeof(header_data_type) == header_data_size,
                   "Header size is invalid.");

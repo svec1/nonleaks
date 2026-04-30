@@ -86,7 +86,7 @@ xxcore_service::xxcore_service(address_type &&_addr, asio::ip::port_type _port)
 }
 
 void xxcore_service::run() {
-    noheap::buffer_type<future_wrapper<void>, 6>               workers;
+    noheap::buffer_type<future_wrapper<void>, workers_number>  workers;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard(
         io.get_executor());
 
