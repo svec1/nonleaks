@@ -287,11 +287,11 @@ void essu::noise_handshake_context::stop() {
             this->log.throw_exception("Remote public key from handshake is invalid.");
     }
 
+    noise_ctx.stop();
+    noise_ctx.get_cipher_state(payload_cipher_state);
     handshake_hash = noise_ctx.get_handshake_hash();
     generate_posthandshake_unique_values();
 
-    noise_ctx.stop();
-    noise_ctx.get_cipher_state(payload_cipher_state);
     noise_ctx.dump();
 }
 
@@ -316,18 +316,22 @@ void essu::noise_handshake_context::check_noise_action(noise::noise_action expec
 void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     typename noise_context_type::dh_key_type public_key{};
     const auto xor_public_key_with_buffer = [&](const auto &buffer) {
-        std::transform(public_key.begin(), public_key.begin() + buffer.size(),
+        std::transform(public_key.begin(),
+                       public_key.begin()
+                           + std::clamp<std::size_t>(buffer.size(), buffer.size(),
+                                                     public_key.size()),
                        reinterpret_cast<const noheap::rbyte *>(buffer.begin()),
                        public_key.begin(), std::bit_xor{});
     };
 
-    // Derives shared key using own and remote public keys
+    // Mixes the empty public key with own and remote public keys
     if (remote_public_key != noise_context_type::dh_key_type{}) {
         xor_public_key_with_buffer(local_keypair.pub);
         xor_public_key_with_buffer(remote_public_key);
     }
-    xor_public_key_with_buffer(unique_value_previous);
-    xor_public_key_with_buffer(ephemeral_obfs_key);
+    // Mixes the empty public key with the previous handshake payload
+    xor_public_key_with_buffer(hash_state.get_hash(
+        {unique_value_previous.data(), unique_value_previous.size()}));
 
     // Gets 32 bytes-hash of public key
     auto public_key_hash = noheap::clip_buffer<32, 0>(

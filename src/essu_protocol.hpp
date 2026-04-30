@@ -182,7 +182,7 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
         }
 
         // Encrypts buffer data and authenticates based on the header
-        if (unit.header.type == unit_type::unit_type_enum::data) {
+        if (handshake_already_complete) {
             payload_cipher_state.encrypt_buffer.set(
                 {unit.buffer.data(), unit.buffer.size()}, unit.buffer_size_without_mac);
             payload_cipher_state.set_encrypt_nonce(unit.header.number);
@@ -265,7 +265,7 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
                 payload_cipher_state.rekey_decrypt();
 
             // Tries to decrypt buffer data
-            if (test_unit.header.type == unit_type::unit_type_enum::data) {
+            if (handshake_already_complete) {
                 payload_cipher_state.decrypt_buffer.set(
                     {test_unit.buffer.data(), test_unit.buffer.size()},
                     test_unit.buffer.size());
@@ -358,6 +358,7 @@ void essu::protocol_type::stop_handshake(session_info_type &session_info) const 
         session_info.sender_units_number   = value1;
         session_info.receiver_units_number = value2;
     } else {
+        noheap::println("{}", value2);
         session_info.sender_units_number   = value2;
         session_info.receiver_units_number = value1;
     }
