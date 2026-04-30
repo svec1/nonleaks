@@ -16,12 +16,13 @@ public:
 
 public:
     noise_handshake_context() = default;
-    noise_handshake_context(noise_handshake_context &&other);
-    noise_handshake_context &operator=(noise_handshake_context &&other);
+
     noise_handshake_context(noise::noise_role role, noise::prologue_extention_type ext,
                             const noise::pre_shared_key_type       &pre_shared_key,
                             const noise_context_type::keypair_type &local_keypair,
                             const noise_context_type::dh_key_type  &remote_public_key);
+    noise_handshake_context(noise_handshake_context &&other);
+    noise_handshake_context &operator=(noise_handshake_context &&other);
 
 public:
     void init_packet(packet_type &pckt);
@@ -74,6 +75,7 @@ private:
     typename noise::buffer_handshake_payload_type        handshake_payload{};
     typename noise_context_type::hash_state::buffer_type handshake_hash{};
     buffer_unique_value_type                             unique_value{};
+    buffer_unique_value_type                             unique_value_previous{};
 };
 
 } // namespace essu
@@ -256,14 +258,15 @@ void essu::noise_handshake_context::start() {
     buffer_handshake_message    = {};
     handshake_payload           = {};
     handshake_hash              = {};
+    ephemeral_obfs_key          = {};
     payload_cipher_state.init({});
     header_cipher_state_sender.init({});
     header_cipher_state_receiver.init({});
     random_state.reseed();
 
     generate_pair_ephemeral_obfs_key();
-    unique_value       = {};
-    ephemeral_obfs_key = {};
+    unique_value_previous = unique_value;
+    unique_value          = {};
 
     noise_ctx.init(role);
     noise_ctx.set_prologue(ext);
@@ -364,11 +367,16 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
 
 // Generates posthandshake header obfuscation key + unique value
 void essu::noise_handshake_context::generate_posthandshake_unique_values() {
+    // Mixes the current handshake payload with the previous handshake payload
+    std::transform(handshake_payload.begin(),
+                   handshake_payload.begin() + unique_value.size(), unique_value.begin(),
+                   handshake_payload.begin(), std::bit_xor{});
+
     // Generates unique values
-    std::decay_t<decltype(handshake_hash)> output_tmp;
+    std::decay_t<decltype(handshake_hash)> unique_value_two;
     hash_state.hkdf({handshake_hash.data(), handshake_hash.size()},
                     {handshake_payload.data(), handshake_payload.size()},
-                    {output_tmp.data(), output_tmp.size()},
+                    {unique_value_two.data(), unique_value_two.size()},
                     {unique_value.data(), unique_value.size()});
 
     // Generates keystream - the header obfuscation key
@@ -378,7 +386,7 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
     noise_context_type::cipher_state cipher_tmp;
     cipher_tmp.set_encrypt_key(
         noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>, 0>(
-            output_tmp));
+            unique_value_two));
     cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
                                   keystream.size() - noise_context_type::mac_size);
     cipher_tmp.encrypt({});

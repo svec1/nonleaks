@@ -565,6 +565,7 @@ noise::noise_context<_config>::~noise_context<_config>() {
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::init(noise_role role) {
     std::size_t ret;
+    cipher_st.dump();
     if ((ret = noise_handshakestate_new_by_id(&handshakestate, &nid_static,
                                               static_cast<std::uint16_t>(role)))
         != NOISE_ERROR_NONE)
@@ -576,8 +577,7 @@ void noise::noise_context<_config>::dump() {
         return;
 
     noise_handshakestate_free(handshakestate);
-    handshakestate = nullptr;
-    cipher_st.dump();
+    handshakestate           = nullptr;
     handshake_buffer         = {};
     handshake_payload_buffer = {};
 }
