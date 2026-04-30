@@ -259,14 +259,14 @@ void essu::noise_handshake_context::start() {
     handshake_payload           = {};
     handshake_hash              = {};
     ephemeral_obfs_key          = {};
+    unique_value_previous       = unique_value;
+    unique_value                = {};
     payload_cipher_state.init({});
     header_cipher_state_sender.init({});
     header_cipher_state_receiver.init({});
     random_state.reseed();
 
     generate_pair_ephemeral_obfs_key();
-    unique_value_previous = unique_value;
-    unique_value          = {};
 
     noise_ctx.init(role);
     noise_ctx.set_prologue(ext);
@@ -326,7 +326,7 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
         xor_public_key_with_buffer(local_keypair.pub);
         xor_public_key_with_buffer(remote_public_key);
     }
-    xor_public_key_with_buffer(unique_value);
+    xor_public_key_with_buffer(unique_value_previous);
     xor_public_key_with_buffer(ephemeral_obfs_key);
 
     // Gets 32 bytes-hash of public key
@@ -369,8 +369,9 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
 void essu::noise_handshake_context::generate_posthandshake_unique_values() {
     // Mixes the current handshake payload with the previous handshake payload
     std::transform(handshake_payload.begin(),
-                   handshake_payload.begin() + unique_value.size(), unique_value.begin(),
-                   handshake_payload.begin(), std::bit_xor{});
+                   handshake_payload.begin() + unique_value_previous.size(),
+                   unique_value_previous.begin(), handshake_payload.begin(),
+                   std::bit_xor{});
 
     // Generates unique values
     std::decay_t<decltype(handshake_hash)> unique_value_two;
