@@ -18,8 +18,8 @@ struct test_action final : network::action<essu::packet_type> {
 
 public:
     void init_packet(test_action::packet_type &pckt) {
-        audio_flow_type::buffer_type buffer_tmp;
-        audio.pop(buffer_tmp);
+        audio_flow_type::buffer_type buffer_tmp{};
+        // audio.pop(buffer_tmp);
         pckt->units[0].header.type = decltype(pckt->units[0].header.type)::data;
         std::copy(reinterpret_cast<noheap::rbyte *>(buffer_tmp.begin()),
                   reinterpret_cast<noheap::rbyte *>(buffer_tmp.end()),
@@ -86,7 +86,7 @@ xxcore_service::xxcore_service(address_type &&_addr, asio::ip::port_type _port)
 }
 
 void xxcore_service::run() {
-    noheap::buffer_type<future_wrapper<void>, workers_number>  workers;
+    noheap::buffer_type<future_wrapper<void>, 6>               workers;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard(
         io.get_executor());
 

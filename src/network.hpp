@@ -326,26 +326,28 @@ udp_stream<Action, v>::~udp_stream() {
 template<Derived_from_action Action, ipv v>
 void udp_stream<Action, v>::register_async_send() {
     asio::post(socket.get_executor(), [this] {
-        // Waits for a signal from send_to that there is new packets for send
-        std::unique_lock<decltype(m_send)> m_send_lock{m_send};
-        cv_send.wait(m_send_lock, [this] {
-            if (!running.load())
-                return true;
-
-            for (auto &buffer_of_address : this->send_buffer_packets)
-                if (buffer_of_address.pckt_s.size())
+        {
+            // Waits for a signal from send_to that there is new packets for send
+            std::unique_lock<decltype(m_send)> m_send_lock{m_send};
+            cv_send.wait(m_send_lock, [this] {
+                if (!running.load())
                     return true;
-            return false;
-        });
-        for (auto &buffer_of_address : send_buffer_packets) {
-            while (buffer_of_address.pckt_s.size()) {
-                auto pckt = buffer_of_address.pckt_s.pop();
-                this->socket.async_send_to(
-                    asio::mutable_buffer{pckt.data(), pckt.size()},
-                    endpoint_type{buffer_of_address.addr, this->port}, 0,
-                    [this](system::error_code ec, std::size_t) {
-                        this->handle_error(ec);
-                    });
+
+                for (auto &buffer_of_address : this->send_buffer_packets)
+                    if (buffer_of_address.pckt_s.size())
+                        return true;
+                return false;
+            });
+
+            system::error_code ec;
+            for (auto &buffer_of_address : send_buffer_packets) {
+                while (buffer_of_address.pckt_s.size()) {
+                    auto pckt = buffer_of_address.pckt_s.pop();
+                    this->socket.send_to(
+                        asio::mutable_buffer{pckt.data(), pckt.size()},
+                        endpoint_type{buffer_of_address.addr, this->port}, 0, ec);
+                    this->handle_error(ec);
+                }
             }
         }
         this->register_async_send();
@@ -359,20 +361,24 @@ void udp_stream<Action, v>::register_async_receive() {
         0, [this](system::error_code ec, std::size_t) {
             this->handle_error(ec);
 
-            // Adds the packet to receive buffer
-            std::lock_guard<decltype(m_receive)> m_receive_lock{m_receive};
-            auto remote_addr = this->get_address_object(receive_endpoint.address());
-            if (const auto &it = std::find_if(
-                    receive_buffer_packets.begin(), receive_buffer_packets.end(),
-                    [&remote_addr](const auto &it) { return it.addr == remote_addr; });
-                it != receive_buffer_packets.end())
-                it->pckt_s.push(
-                    buffered_received_packet_type{receive_pckt, get_now_ms()});
-            else if (receive_buffer_packets.size() < max_count_addresses)
-                receive_buffer_packets.push_back(
-                    typename decltype(receive_buffer_packets)::value_type{
-                        remote_addr,
-                        {buffered_received_packet_type{receive_pckt, get_now_ms()}}});
+            {
+                // Adds the packet to receive buffer
+                std::lock_guard<decltype(m_receive)> m_receive_lock{m_receive};
+                auto remote_addr = this->get_address_object(receive_endpoint.address());
+                if (const auto &it = std::find_if(receive_buffer_packets.begin(),
+                                                  receive_buffer_packets.end(),
+                                                  [&remote_addr](const auto &it) {
+                                                      return it.addr == remote_addr;
+                                                  });
+                    it != receive_buffer_packets.end())
+                    it->pckt_s.push(
+                        buffered_received_packet_type{receive_pckt, get_now_ms()});
+                else if (receive_buffer_packets.size() < max_count_addresses)
+                    receive_buffer_packets.push_back(
+                        typename decltype(receive_buffer_packets)::value_type{
+                            remote_addr,
+                            {buffered_received_packet_type{receive_pckt, get_now_ms()}}});
+            }
 
             // Signals receive_from that there is new packet for local receive
             cv_receive.notify_all();
@@ -410,45 +416,27 @@ void udp_stream<Action, v>::send_to(address_type addr) {
 template<Derived_from_action Action, ipv v>
 template<Compatible_wrapper_packet_with_action<Action> TWrapper_packet>
 bool udp_stream<Action, v>::receive_from(address_type addr) {
-    decltype(this->receive_buffer_packets.begin()) it;
-
     typename action_type::packet_type pckt;
-    bool                              find_received_packet = false;
-
-    // Tries to get a packet from receive buffer
-    {
-        std::lock_guard<decltype(m_receive)> m_receive_lock{m_receive};
-        if (it = std::find_if(
-                receive_buffer_packets.begin(), receive_buffer_packets.end(),
-                [remote_addr = addr](const auto &it) { return it.addr == remote_addr; });
-            it != receive_buffer_packets.end()) {
-            while (it->pckt_s.size()) {
-                auto pckt_tmp = it->pckt_s.pop();
-
-                if (get_now_ms() - pckt_tmp.received_ms >= timeout_ms)
-                    continue;
-
-                pckt                 = pckt_tmp.pckt;
-                find_received_packet = true;
-                break;
-            }
-        }
-    }
 
     // Waits for a signal from register_async_receive that a packet was received
-    if (!find_received_packet) {
-        std::unique_lock<decltype(m_receive)> m_receive_lock{m_receive};
+    {
+        std::unique_lock<decltype(m_receive)>          m_receive_lock{m_receive};
+        decltype(this->receive_buffer_packets.begin()) it;
+        bool                                           received_packet = false;
         if (!cv_receive.wait_for(
-                m_receive_lock, std::chrono::milliseconds(timeout_ms), [&] {
+                m_receive_lock, std::chrono::milliseconds(timeout_ms),
+                [&] {
                     if (!running.load())
                         return true;
+                    received_packet = true;
                     return (it = std::find_if(
                                 this->receive_buffer_packets.begin(),
                                 this->receive_buffer_packets.end(),
                                 [addr](const auto &it) { return it.addr == addr; }))
                                != this->receive_buffer_packets.end()
                            && it->pckt_s.size();
-                }))
+                })
+            || !received_packet)
             return false;
 
         pckt = it->pckt_s.pop().pckt;
