@@ -19,7 +19,7 @@ struct test_action final : network::action<essu::packet_type> {
 public:
     void init_packet(test_action::packet_type &pckt) {
         audio_flow_type::buffer_type buffer_tmp{};
-        // audio.pop(buffer_tmp);
+        audio.pop(buffer_tmp);
         pckt->units[0].header.type = decltype(pckt->units[0].header.type)::data;
         std::copy(reinterpret_cast<noheap::rbyte *>(buffer_tmp.begin()),
                   reinterpret_cast<noheap::rbyte *>(buffer_tmp.end()),
@@ -99,6 +99,7 @@ void xxcore_service::run() {
             stream.close();
         });
 
+        stream.register_address(addr);
         stream.register_async_send();
         stream.register_async_receive();
 
