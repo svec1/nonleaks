@@ -107,22 +107,12 @@ void essu::session<TStream>::register_connection() {
     running.store(true);
 
     self_post([this] {
-        try {
-            this->send();
-        } catch (...) {
-            this->failed.store(true);
-            throw;
-        }
+        this->send();
         return this->running.load()
                && essu::wrapper_packet_type::get_protocol().can_send_packet(this->info);
     });
     self_post([this] {
-        try {
-            this->receive();
-        } catch (...) {
-            this->failed.store(true);
-            throw;
-        }
+        this->receive();
         return this->running.load()
                && essu::wrapper_packet_type::get_protocol().can_receive_packet(
                    this->info);
@@ -132,8 +122,9 @@ template<network::Udp_stream TStream>
 void essu::session<TStream>::self_post(std::function<bool()> func) {
     asio::post(stream.get_executor(), [this, func] {
         const auto stop_post = [this] {
-            this->running.store(false);
             ++this->io_stop;
+            if (this->io_stop == 2)
+                this->running.store(false);
             this->io_stop.notify_all();
         };
 
@@ -145,8 +136,10 @@ void essu::session<TStream>::self_post(std::function<bool()> func) {
         } catch (const noheap::runtime_error &_excp) {
             if (!excp)
                 excp = _excp;
+            this->failed.store(true);
             stop_post();
         } catch (...) {
+            this->failed.store(true);
             stop_post();
             throw;
         }

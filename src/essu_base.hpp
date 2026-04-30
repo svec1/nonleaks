@@ -11,11 +11,11 @@ constexpr std::size_t packet_size                     = 1376;
 constexpr std::size_t header_data_size                = 16;
 constexpr std::size_t min_random_bytes_number         = 64;
 constexpr std::size_t batch_units_number              = 4;
-constexpr std::size_t batches_per_rekey_number        = 32;
+constexpr std::size_t units_per_rekey_number          = 17;
 constexpr std::size_t batches_window_number           = 16;
 constexpr std::size_t max_undecrypted_batches_number  = 16;
-constexpr std::size_t max_available_batches_number    = 1000;
-constexpr std::size_t max_available_handshakes_number = 512;
+constexpr std::size_t max_available_batches_number    = 10;
+constexpr std::size_t max_available_handshakes_number = 10000;
 constexpr std::size_t unit_size                       = packet_size / batch_units_number;
 constexpr std::size_t buffer_data_size                = unit_size - header_data_size;
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;
@@ -52,7 +52,6 @@ public:
         data,
         dummy,
         retry,
-        retry_ok,
     };
     enum class flag_type_enum : noheap::ubyte {
         none = 0,

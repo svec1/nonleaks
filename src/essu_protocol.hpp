@@ -118,13 +118,9 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
     else
         session_info.handshake_context.init_packet(pckt);
 
-    if (session_info.handshake_context.get_role() == noise::noise_role::INITIATOR
-        && session_info.batches_sent_number >= max_available_batches_number) {
+    if (session_info.was_received_retry
+        || session_info.batches_sent_number >= max_available_batches_number) {
         pckt->units[2].header.type  = unit_type::unit_type_enum::retry;
-        session_info.was_sent_retry = true;
-    } else if (session_info.handshake_context.get_role() == noise::noise_role::RESPONDER
-               && session_info.was_received_retry) {
-        pckt->units[2].header.type  = unit_type::unit_type_enum::retry_ok;
         session_info.was_sent_retry = true;
     }
 
@@ -138,8 +134,7 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
         unit.header.key_iteration_number = session_info.sender_key_iteration_number;
 
         // Forces units to be dummy if necessary
-        if (i >= 2 && unit.header.type != unit_type::unit_type_enum::retry
-            && unit.header.type != unit_type::unit_type_enum::retry_ok)
+        if (i >= 2 && unit.header.type != unit_type::unit_type_enum::retry)
             unit.header.type = unit_type::unit_type_enum::dummy;
 
         // Adds random padding
@@ -165,7 +160,6 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
                     break;
                 case unit_type::unit_type_enum::dummy:
                 case unit_type::unit_type_enum::retry:
-                case unit_type::unit_type_enum::retry_ok:
                     payload_size = 0;
                     break;
                 default:
@@ -188,6 +182,12 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
             payload_cipher_state.set_encrypt_nonce(unit.header.number);
             payload_cipher_state.encrypt(
                 {reinterpret_cast<noheap::rbyte *>(&unit.header), sizeof(unit.header)});
+
+            // Performs rekey for encryption
+            if (unit.header.number % units_per_rekey_number == 0) {
+                payload_cipher_state.rekey_encrypt();
+                ++session_info.sender_key_iteration_number;
+            }
         }
 
         // Generates header obfuscation key based on the unit_number
@@ -207,13 +207,7 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
     std::mt19937       generator(rd());
     std::shuffle(pckt->units.begin(), pckt->units.end(), generator);
 
-    // Performs rekey for encryption
     ++session_info.batches_sent_number;
-    if (handshake_already_complete
-        && session_info.batches_sent_number % batches_per_rekey_number == 0) {
-        payload_cipher_state.rekey_encrypt();
-        ++session_info.sender_key_iteration_number;
-    }
 }
 
 void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type addr,
@@ -310,8 +304,7 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
     ++session_info.receiver_units_number;
     ++session_info.batches_received_number;
 
-    if (pckt->units[2].header.type == unit_type::unit_type_enum::retry
-        || pckt->units[2].header.type == unit_type::unit_type_enum::retry_ok)
+    if (pckt->units[2].header.type == unit_type::unit_type_enum::retry)
         session_info.was_received_retry = true;
 
     // Calls callback(action) to handle packet
@@ -358,7 +351,6 @@ void essu::protocol_type::stop_handshake(session_info_type &session_info) const 
         session_info.sender_units_number   = value1;
         session_info.receiver_units_number = value2;
     } else {
-        noheap::println("{}", value2);
         session_info.sender_units_number   = value2;
         session_info.receiver_units_number = value1;
     }
