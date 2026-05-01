@@ -3,7 +3,7 @@
 
 #include "utils.hpp"
 
-#if defined(ALSA) || defined(__linux__)
+#if defined(ALSA)
 #define ARSND_NAME_D "ALSA"
 #elif defined(SNDIO)
 #define ARSND_NAME_D "SNDIO"
@@ -14,7 +14,8 @@
 #elif defined(NETBSD_AUDIO)
 #define ARSND_NAME_D "NETBSD_AUDIO"
 #else
-#warning "Audio is not available."
+#define ARSND_NAME_D "NONAVAILABLE"
+#warning "Audio is nonavailable."
 #endif
 
 enum stream_audio_mode : std::size_t { playback = 0, capture, bidirect };
@@ -237,7 +238,7 @@ template<audio_config _cfg>
 std::string_view base_audio<_cfg>::device_capture =
     base_audio<_cfg>::default_device_capture;
 
-#if defined(ALSA) || defined(__linux__)
+#if defined(ALSA)
 #include "alsa_audio.hpp"
 #elif defined(SNDIO)
 #include "sndio_audio.hpp"
@@ -255,18 +256,18 @@ public:
     audio(stream_audio_mode _mode);
 
 protected:
-    void pread(sio_base_audio::buffer_type::value_type *buffer) override;
-    void pwrite(const sio_base_audio::buffer_type::value_type *buffer) override;
+    void pread(audio::buffer_type::value_type *buffer) override;
+    void pwrite(const audio::buffer_type::value_type *buffer) override;
 };
 
 template<audio_config _cfg>
-audio<_cfg>::sio_base_audio(stream_audio_mode _mode) : base_audio<_cfg>(_mode) {
+audio<_cfg>::audio(stream_audio_mode _mode) : base_audio<_cfg>(_mode) {
 }
 template<audio_config _cfg>
-void audio<_cfg>::pread(sio_base_audio::buffer_type::value_type *buffer) {
+void audio<_cfg>::pread(audio::buffer_type::value_type *) {
 }
 template<audio_config _cfg>
-void audio<_cfg>::pwrite(const sio_base_audio::buffer_type::value_type *buffer) {
+void audio<_cfg>::pwrite(const audio::buffer_type::value_type *) {
 }
 
 #endif
