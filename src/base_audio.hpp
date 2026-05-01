@@ -14,7 +14,7 @@
 #elif defined(NETBSD_AUDIO)
 #define ARSND_NAME_D "NETBSD_AUDIO"
 #else
-#error "Audio architecture is not defined."
+#warning "Audio is not available."
 #endif
 
 enum stream_audio_mode : std::size_t { playback = 0, capture, bidirect };
@@ -247,6 +247,28 @@ std::string_view base_audio<_cfg>::device_capture =
 #include "openbsd_audio.hpp"
 #elif defined(NETBSD_AUDIO)
 #include "netbsd_audio.hpp"
+#else
+
+template<audio_config _cfg>
+class audio : public base_audio<_cfg> {
+public:
+    audio(stream_audio_mode _mode);
+
+protected:
+    void pread(sio_base_audio::buffer_type::value_type *buffer) override;
+    void pwrite(const sio_base_audio::buffer_type::value_type *buffer) override;
+};
+
+template<audio_config _cfg>
+audio<_cfg>::sio_base_audio(stream_audio_mode _mode) : base_audio<_cfg>(_mode) {
+}
+template<audio_config _cfg>
+void audio<_cfg>::pread(sio_base_audio::buffer_type::value_type *buffer) {
+}
+template<audio_config _cfg>
+void audio<_cfg>::pwrite(const sio_base_audio::buffer_type::value_type *buffer) {
+}
+
 #endif
 
 #endif
