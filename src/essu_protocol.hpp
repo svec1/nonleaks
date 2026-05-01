@@ -59,12 +59,11 @@ public:
                 protocol_type::callback_handle_type callback) const;
 
 public:
-    void register_session_info(
-        session_info_type &session_info, noise::noise_role role,
-        noise::prologue_extention_type          ext,
-        const noise::pre_shared_key_type       &pre_shared_key,
-        const noise_context_type::keypair_type &local_keypair,
-        const noise_context_type::dh_key_type  &remote_public_key) const;
+    void register_session_info(session_info_type &session_info, noise::noise_role role,
+                               noise::prologue_extention_type          ext,
+                               const noise_context_type::keypair_type &local_keypair,
+                               const noise_context_type::dh_key_type  &remote_public_key,
+                               const noise::pre_shared_key_type &pre_shared_key) const;
     void start_handshake(session_info_type &session_info) const;
     void stop_handshake(session_info_type &session_info) const;
 
@@ -312,9 +311,10 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
 
 void essu::protocol_type::register_session_info(
     session_info_type &session_info, noise::noise_role role,
-    noise::prologue_extention_type ext, const noise::pre_shared_key_type &pre_shared_key,
+    noise::prologue_extention_type          ext,
     const noise_context_type::keypair_type &local_keypair,
-    const noise_context_type::dh_key_type  &remote_public_key) const {
+    const noise_context_type::dh_key_type  &remote_public_key,
+    const noise::pre_shared_key_type       &pre_shared_key) const {
     if (find_session_info(session_info.addr) != session_info_s.end())
         this->log.throw_exception("Session already exist.");
     if (session_info_s.size() == network::max_count_addresses)
@@ -323,8 +323,8 @@ void essu::protocol_type::register_session_info(
     const_cast<session_info_s_type &>(session_info_s).push_back(&session_info);
 
     session_info_s[session_info_s.size() - 1]->handshake_context =
-        noise_handshake_context{role, ext, pre_shared_key, local_keypair,
-                                remote_public_key};
+        noise_handshake_context{role, ext, local_keypair, remote_public_key,
+                                pre_shared_key};
 }
 void essu::protocol_type::start_handshake(session_info_type &session_info) const {
     session_info.reset_state();

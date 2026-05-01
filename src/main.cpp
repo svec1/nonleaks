@@ -1,7 +1,5 @@
 #include <fstream>
 
-#include <openssl/evp.h>
-
 #include "xxcore_service.hpp"
 
 using namespace boost;
@@ -14,8 +12,7 @@ struct xxcore_config {
     std::string_view             device;
     asio::ip::port_type          port;
     xxcore_service::address_type addr;
-
-    bool keypair_needs_updating = false;
+    bool                         new_keypair = false;
 };
 
 // Parses cmd options
@@ -83,7 +80,7 @@ static void parse_options(xxcore_config &cfg, int argc, char *argv[]) {
                     break;
                 }
                 case 'k': {
-                    cfg.keypair_needs_updating = true;
+                    cfg.new_keypair = true;
                     break;
                 }
                 default:
@@ -96,9 +93,7 @@ static void parse_options(xxcore_config &cfg, int argc, char *argv[]) {
 }
 
 // Reads json file
-xxcore_service::buffer_config_type read_config() {
-    xxcore_service::buffer_config_type buffer_tmp{};
-
+void read_config(json_config::buffer_config_type &buffer) {
     std::ifstream config(name_config_file);
     if (!config.is_open())
         throw noheap::runtime_error("The config file does not exist.");
@@ -106,15 +101,14 @@ xxcore_service::buffer_config_type read_config() {
     config.seekg(0, std::ios_base::end);
     std::size_t size = config.tellg();
 
-    if (size > buffer_tmp.size())
+    if (size > buffer.size())
         throw noheap::runtime_error("The config file is too big.");
 
     config.seekg(0, std::ios_base::beg);
-    config.read(buffer_tmp.data(), size);
-    return buffer_tmp;
+    config.read(buffer.data(), size);
 }
-// Updates json file
-void write_config(xxcore_service::buffer_config_type &buffer) {
+// Writes json file
+void write_config(const json_config::buffer_config_type &buffer) {
     std::ofstream config(name_config_file);
     if (!config.is_open())
         throw noheap::runtime_error("The config file does not exist.");
@@ -143,6 +137,8 @@ void print_cfg(const xxcore_config &cfg) {
 }
 
 int main(int argc, char *argv[]) {
+    json_config                     config;
+    json_config::buffer_config_type buffer_config{};
     try {
         xxcore_config cfg = {.device = dba::default_device_playback, .port = 8888};
         parse_options(cfg, argc, argv);
@@ -150,15 +146,17 @@ int main(int argc, char *argv[]) {
 
         dba::device_playback = cfg.device;
         dba::device_capture  = cfg.device;
+        read_config(buffer_config);
+        config.set_buffer_config(buffer_config, cfg.new_keypair);
 
-        auto buffer_config = read_config();
-
-        xxcore_service service(std::move(cfg.addr), cfg.port);
-
-        service.configurate(buffer_config, cfg.keypair_needs_updating);
-        write_config(buffer_config);
-
-        service.run();
+        {
+            scope_guard    sc([&] {
+                config.get_buffer_config(buffer_config);
+                write_config(buffer_config);
+            });
+            xxcore_service service(config.get_config(), std::move(cfg.addr), cfg.port);
+            service.run();
+        }
 
     } catch (noheap::runtime_error &excp) {
         log_main.exception_to_all(excp);

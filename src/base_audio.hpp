@@ -15,7 +15,6 @@
 #define ARSND_NAME_D "NETBSD_AUDIO"
 #else
 #define ARSND_NAME_D "NONAVAILABLE"
-#warning "Audio is nonavailable."
 #endif
 
 enum stream_audio_mode : std::size_t { playback = 0, capture, bidirect };

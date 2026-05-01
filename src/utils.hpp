@@ -26,7 +26,7 @@ namespace std {
 using ssize_t = std::make_signed_t<std::size_t>;
 } // namespace std
 
-constexpr std::size_t get_now_ms() {
+std::size_t get_now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();

@@ -83,6 +83,14 @@ noise_role get_noise_role(std::string_view role_string) {
         return noise_role::RESPONDER;
     return noise_role::UNKNOWN;
 }
+std::string_view get_noise_role_string(noise_role role) {
+    if (role == noise_role::INITIATOR)
+        return "INITIATOR";
+    else if (role == noise_role::RESPONDER)
+        return "RESPONDER";
+    return "UNKNOWN";
+}
+
 template<noise_pattern pattern, ecdh_type ecdh>
 consteval std::size_t pattern_ecdh_is_compatible() {
     if constexpr (((pattern == noise_pattern::XX || pattern == noise_pattern::XK)
@@ -146,26 +154,27 @@ struct noise_context_config {
     static consteval std::size_t get_hs1_size() {
         if constexpr (pattern == noise_pattern::XX)
             return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
-        if constexpr (pattern == noise_pattern::XK)
+        else if constexpr (pattern == noise_pattern::XK)
             return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XX_HFS
                            || pattern == noise_pattern::XK_HFS) {
             return get_kem_key_size<ecdh>() + get_dh_key_size<ecdh>()
                    + get_mac_size<cipher>() * 2;
-        }
+        } else
+            static_assert(false, "Invalid noise context config.");
     }
     static consteval std::size_t get_hs2_size() {
         if constexpr (pattern == noise_pattern::XX)
             return noise::get_dh_key_size<ecdh>() * 2 + get_mac_size<cipher>() * 2;
-        if constexpr (pattern == noise_pattern::XK)
+        else if constexpr (pattern == noise_pattern::XK)
             return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
-        else if constexpr (pattern == noise_pattern::XX_HFS) {
+        else if constexpr (pattern == noise_pattern::XX_HFS)
             return get_kem_cipher_text_size<ecdh>() + noise::get_dh_key_size<ecdh>() * 2
                    + get_mac_size<cipher>() * 2 + 16;
-        } else if constexpr (pattern == noise_pattern::XK_HFS) {
+        else if constexpr (pattern == noise_pattern::XK_HFS)
             return get_kem_cipher_text_size<ecdh>() + noise::get_dh_key_size<ecdh>()
                    + get_mac_size<cipher>();
-        } else
+        else
             static_assert(false, "Invalid noise context config.");
     }
     static consteval std::size_t get_hs3_size() {

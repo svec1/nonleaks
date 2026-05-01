@@ -203,7 +203,7 @@ concept Udp_stream = std::same_as<T, udp_stream<typename T::action_type, T::v>>;
 template<Derived_from_action Action, ipv _v>
 class udp_stream {
 private:
-    static constexpr asio::ip::udp get_ipv() {
+    static asio::ip::udp get_ipv() {
         if constexpr (v == ipv::v6)
             return decltype(get_ipv())::v6();
         else
@@ -405,8 +405,9 @@ void udp_stream<Action, v>::register_address(address_type addr) {
     if (auto it = std::find_if(send_buffer.begin(), send_buffer.end(),
                                [&addr](const auto &it) { return it.addr == addr; });
         it != send_buffer.end())
-        log.throw_exception("Address [{}] has already been registered.",
-                            this->get_address_bytes(addr));
+        log.throw_exception(
+            "Address [{}] has already been registered.",
+            std::string_view(noheap::hex_encode(this->get_address_bytes(addr))));
     else if (send_buffer.size() == max_count_addresses)
         log.throw_exception("Limit of connections has been reached.");
 
@@ -429,8 +430,9 @@ void udp_stream<Action, v>::send_to(address_type addr) {
     if (it = std::find_if(send_buffer.begin(), send_buffer.end(),
                           [&addr](const auto &it) { return it.addr == addr; });
         it == send_buffer.end())
-        log.throw_exception("Address [{}] is not registered.",
-                            this->get_address_bytes(addr));
+        log.throw_exception(
+            "Address [{}] is not registered.",
+            std::string_view(noheap::hex_encode(this->get_address_bytes(addr))));
 
     // Pushes the packet to send_buffer
     {
@@ -452,8 +454,9 @@ bool udp_stream<Action, v>::receive_from(address_type addr) {
     if (it = std::find_if(receive_buffer.begin(), receive_buffer.end(),
                           [&addr](const auto &it) { return it.addr == addr; });
         it == receive_buffer.end())
-        log.throw_exception("Address [{}] is not registered.",
-                            this->get_address_bytes(addr));
+        log.throw_exception(
+            "Address [{}] is not registered.",
+            std::string_view(noheap::hex_encode(this->get_address_bytes(addr))));
 
     // Waits for a signal from register_async_receive that a packet was received
     {

@@ -18,9 +18,9 @@ public:
     noise_handshake_context() = default;
 
     noise_handshake_context(noise::noise_role role, noise::prologue_extention_type ext,
-                            const noise::pre_shared_key_type       &pre_shared_key,
                             const noise_context_type::keypair_type &local_keypair,
-                            const noise_context_type::dh_key_type  &remote_public_key);
+                            const noise_context_type::dh_key_type  &remote_public_key,
+                            const noise::pre_shared_key_type       &pre_shared_key);
     noise_handshake_context(noise_handshake_context &&other);
     noise_handshake_context &operator=(noise_handshake_context &&other);
 
@@ -63,9 +63,9 @@ private:
 
     noise::noise_role                role;
     noise::prologue_extention_type   ext;
-    noise::pre_shared_key_type       pre_shared_key;
     noise_context_type::keypair_type local_keypair;
     noise_context_type::dh_key_type  remote_public_key;
+    noise::pre_shared_key_type       pre_shared_key;
 
     typename noise::buffer_handshake_packet_type buffer_handshake_message{};
     std::size_t                                  offset_noise_handshake_unit;
@@ -80,16 +80,16 @@ private:
 
 } // namespace essu
 essu::noise_handshake_context::noise_handshake_context(noise_handshake_context &&other)
-    : noise_handshake_context(other.role, other.ext, other.pre_shared_key,
-                              other.local_keypair, other.remote_public_key) {
+    : noise_handshake_context(other.role, other.ext, other.local_keypair,
+                              other.remote_public_key, other.pre_shared_key) {
 }
 essu::noise_handshake_context::noise_handshake_context(
     noise::noise_role _role, noise::prologue_extention_type _ext,
-    const noise::pre_shared_key_type       &_pre_shared_key,
     const noise_context_type::keypair_type &_local_keypair,
-    const noise_context_type::dh_key_type  &_remote_public_key)
-    : role(_role), ext(_ext), pre_shared_key(_pre_shared_key),
-      local_keypair(_local_keypair), remote_public_key(_remote_public_key) {
+    const noise_context_type::dh_key_type  &_remote_public_key,
+    const noise::pre_shared_key_type       &_pre_shared_key)
+    : role(_role), ext(_ext), local_keypair(_local_keypair),
+      remote_public_key(_remote_public_key), pre_shared_key(_pre_shared_key) {
 }
 essu::noise_handshake_context &
     essu::noise_handshake_context::operator=(noise_handshake_context &&other) {
