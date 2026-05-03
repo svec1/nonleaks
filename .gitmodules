@@ -3,4 +3,4 @@
     url = https://github.com/xiph/opus.git
 [submodule "thirdparty/cnoise"]
 	path = thirdparty/cnoise
-	url = https://github.com/svec1/cnoise.git
+    url = https://github.com/svec1/cnoise.git

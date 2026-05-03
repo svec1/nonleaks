@@ -14,10 +14,10 @@ public:
 
 public:
     session(udp_stream &_stream, udp_stream::address_type _remote_addr,
-            noise::noise_role _role, noise::prologue_extention_type _ext,
-            const noise_context_type::keypair_type &_local_keypair,
-            const noise_context_type::dh_key_type  &_remote_public_key,
-            const noise::pre_shared_key_type       &_pre_shared_key);
+            noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
+            const noise_context_type::keypair_type    &_local_keypair,
+            const noise_context_type::buffer_key_type &_remote_public_key,
+            const noise::buffer_pre_shared_key_type   &_pre_shared_key);
 
 public:
     // Establishes connection with node(remote_addr): performs noise handshake
@@ -58,13 +58,12 @@ private:
 } // namespace essu
 
 template<network::Udp_stream TStream>
-essu::session<TStream>::session(udp_stream                             &_stream,
-                                udp_stream::address_type                _remote_addr,
-                                noise::noise_role                       _role,
-                                noise::prologue_extention_type          _ext,
-                                const noise_context_type::keypair_type &_local_keypair,
-                                const noise_context_type::dh_key_type &_remote_public_key,
-                                const noise::pre_shared_key_type      &_pre_shared_key)
+essu::session<TStream>::session(
+    udp_stream &_stream, udp_stream::address_type _remote_addr, noise::noise_role _role,
+    noise::buffer_prologue_extention_type      _ext,
+    const noise_context_type::keypair_type    &_local_keypair,
+    const noise_context_type::buffer_key_type &_remote_public_key,
+    const noise::buffer_pre_shared_key_type   &_pre_shared_key)
     : stream(_stream), info(stream.get_address_bytes(_remote_addr)),
       buffer_hex_remote_addr(
           noheap::clip_buffer<noheap::buffer_size<decltype(buffer_hex_remote_addr)>, 0>(

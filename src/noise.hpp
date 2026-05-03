@@ -13,12 +13,12 @@ constexpr std::size_t prologue_extention_size = 16;
 constexpr std::size_t pre_shared_key_size     = 32;
 
 template<std::size_t size>
-using buffer_type                   = noheap::buffer_bytes_type<size, noheap::rbyte>;
-using buffer_handshake_packet_type  = buffer_type<handshake_packet_size>;
-using buffer_handshake_payload_type = buffer_type<handshake_payload_size>;
-using prologue_extention_type       = buffer_type<prologue_extention_size>;
-using pre_shared_key_type           = buffer_type<pre_shared_key_size>;
-using buffer_name_id_type           = noheap::buffer_chars_type<NOISE_MAX_PROTOCOL_NAME>;
+using buffer_type                    = noheap::buffer_bytes_type<size, noheap::rbyte>;
+using buffer_handshake_packet_type   = buffer_type<handshake_packet_size>;
+using buffer_handshake_payload_type  = buffer_type<handshake_payload_size>;
+using buffer_prologue_extention_type = buffer_type<prologue_extention_size>;
+using buffer_pre_shared_key_type     = buffer_type<pre_shared_key_size>;
+using buffer_name_id_type            = noheap::buffer_chars_type<NOISE_MAX_PROTOCOL_NAME>;
 
 enum class noise_pattern : std::uint16_t {
     UNKNOWN = 0,
@@ -51,9 +51,10 @@ enum class ecdh_type : std::uint16_t {
 };
 
 enum class cipher_type : std::uint16_t {
-    UNKNOWN    = 0,
-    CHACHAPOLY = NOISE_CIPHER_CHACHAPOLY,
-    AESGCM     = NOISE_CIPHER_AESGCM,
+    UNKNOWN     = 0,
+    CHACHAPOLY  = NOISE_CIPHER_CHACHAPOLY,
+    XCHACHAPOLY = NOISE_CIPHER_XCHACHAPOLY,
+    AESGCM      = NOISE_CIPHER_AESGCM,
 };
 
 enum class hash_type : std::uint16_t {
@@ -126,10 +127,18 @@ consteval std::size_t get_kem_cipher_text_size() {
 
 template<cipher_type cipher>
 consteval std::size_t get_mac_size() {
-    if constexpr (cipher == cipher_type::CHACHAPOLY)
+    if constexpr (cipher == cipher_type::CHACHAPOLY || cipher == cipher_type::XCHACHAPOLY
+                  || cipher == cipher_type::AESGCM)
         return 16;
-    else if constexpr (cipher == cipher_type::AESGCM)
-        return 16;
+    else
+        static_assert(false, "The passed cipher type is not supported.");
+}
+template<cipher_type cipher>
+consteval std::size_t get_nonce_size() {
+    if constexpr (cipher == cipher_type::CHACHAPOLY || cipher == cipher_type::AESGCM)
+        return 12;
+    else if constexpr (cipher == cipher_type::XCHACHAPOLY)
+        return 24;
     else
         static_assert(false, "The passed cipher type is not supported.");
 }
@@ -213,18 +222,20 @@ public:
     };
 
 public:
-    static constexpr std::size_t mac_size = get_mac_size<config.cipher>();
-    using dh_key_type                     = buffer_type<get_dh_key_size<ecdh>()>;
+    static constexpr std::size_t mac_size   = get_mac_size<config.cipher>();
+    static constexpr std::size_t nonce_size = get_nonce_size<config.cipher>();
+    using buffer_key_type                   = buffer_type<get_dh_key_size<ecdh>()>;
+    using buffer_nonce_type = buffer_type<get_nonce_size<config.cipher>()>;
 
 private:
     struct {
-        std::uint16_t           prefix;
-        std::uint16_t           pattern;
-        std::uint16_t           dh;
-        std::uint16_t           cipher;
-        std::uint16_t           hash;
-        std::uint16_t           hybrid;
-        prologue_extention_type ext;
+        std::uint16_t                  prefix;
+        std::uint16_t                  pattern;
+        std::uint16_t                  dh;
+        std::uint16_t                  cipher;
+        std::uint16_t                  hash;
+        std::uint16_t                  hybrid;
+        buffer_prologue_extention_type ext;
     } prologue = {.prefix  = nid_static.prefix_id,
                   .pattern = nid_static.pattern_id,
                   .dh      = nid_static.dh_id,
@@ -238,8 +249,8 @@ public:
     using buffer_prologue_type                 = noheap::buffer_bytes_type<prologue_size>;
 
     struct keypair_type {
-        dh_key_type priv;
-        dh_key_type pub;
+        buffer_key_type priv;
+        buffer_key_type pub;
     };
 
     struct noise_buffer_view {
@@ -301,10 +312,13 @@ public:
         void rekey_encrypt();
         void rekey_decrypt();
 
-        void set_encrypt_nonce(std::uint64_t nonce);
-        void set_decrypt_nonce(std::uint64_t nonce);
-        void set_encrypt_key(const dh_key_type &key);
-        void set_decrypt_key(const dh_key_type &key);
+        void set_encrypt_nonce(const buffer_nonce_type &nonce);
+        void set_decrypt_nonce(const buffer_nonce_type &nonce);
+        void set_encrypt_key(const buffer_key_type &key);
+        void set_decrypt_key(const buffer_key_type &key);
+
+        buffer_nonce_type get_encrypt_nonce();
+        buffer_nonce_type get_decrypt_nonce();
 
     private:
         void set_states(NoiseCipherState *_encrypt_state,
@@ -371,14 +385,14 @@ public:
     void set_handshake_message();
     void get_handshake_message();
 
-    void                    set_prologue(prologue_extention_type ext);
+    void                    set_prologue(buffer_prologue_extention_type ext);
     buffer_prologue_type    get_prologue();
-    dh_key_type             get_remote_public_key();
+    buffer_key_type         get_remote_public_key();
     hash_state::buffer_type get_handshake_hash();
 
     void set_local_keypair(const keypair_type &kp);
-    void set_remote_public_key(const dh_key_type &key);
-    void set_pre_shared_key(const pre_shared_key_type &key);
+    void set_remote_public_key(const buffer_key_type &key);
+    void set_pre_shared_key(const buffer_pre_shared_key_type &key);
 
 public:
     static buffer_name_id_type get_name_id();
@@ -507,22 +521,30 @@ void noise::noise_context<_config>::cipher_state::rekey_decrypt() {
         handle_error(ret, "Failed to rekey for decrypt state.");
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::cipher_state::set_encrypt_nonce(std::uint64_t nonce) {
+void noise::noise_context<_config>::cipher_state::set_encrypt_nonce(
+    const buffer_nonce_type &nonce) {
     check_encrypt_key();
     std::size_t ret;
-    if ((ret = noise_cipherstate_set_nonce(encrypt_state, nonce)) != NOISE_ERROR_NONE)
+    if ((ret = noise_cipherstate_set_nonce(
+             encrypt_state, reinterpret_cast<const noheap::ubyte *>(nonce.data()),
+             get_nonce_size<config.cipher>()))
+        != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to set encrypting nonce.");
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::cipher_state::set_decrypt_nonce(std::uint64_t nonce) {
+void noise::noise_context<_config>::cipher_state::set_decrypt_nonce(
+    const buffer_nonce_type &nonce) {
     check_decrypt_key();
     std::size_t ret;
-    if ((ret = noise_cipherstate_set_nonce(decrypt_state, nonce)) != NOISE_ERROR_NONE)
+    if ((ret = noise_cipherstate_set_nonce(
+             decrypt_state, reinterpret_cast<const noheap::ubyte *>(nonce.data()),
+             get_nonce_size<config.cipher>()))
+        != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to set decrypting nonce.");
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_encrypt_key(
-    const dh_key_type &key) {
+    const buffer_key_type &key) {
     std::size_t ret;
     if ((ret = noise_cipherstate_init_key(
              encrypt_state, reinterpret_cast<const noheap::ubyte *>(key.data()),
@@ -532,13 +554,37 @@ void noise::noise_context<_config>::cipher_state::set_encrypt_key(
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_decrypt_key(
-    const dh_key_type &key) {
+    const buffer_key_type &key) {
     std::size_t ret;
     if ((ret = noise_cipherstate_init_key(
              decrypt_state, reinterpret_cast<const noheap::ubyte *>(key.data()),
              key.size()))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to set decrypt key.");
+}
+template<noise::noise_context_config _config>
+noise::noise_context<_config>::buffer_nonce_type
+    noise::noise_context<_config>::cipher_state::get_encrypt_nonce() {
+    buffer_nonce_type buffer_nonce;
+    std::size_t       ret;
+    if ((ret = noise_cipherstate_get_nonce(
+             encrypt_state, reinterpret_cast<noheap::ubyte *>(buffer_nonce.data()),
+             buffer_nonce.size()))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to get encrypt key.");
+    return buffer_nonce;
+}
+template<noise::noise_context_config _config>
+noise::noise_context<_config>::buffer_nonce_type
+    noise::noise_context<_config>::cipher_state::get_decrypt_nonce() {
+    buffer_nonce_type buffer_nonce;
+    std::size_t       ret;
+    if ((ret = noise_cipherstate_get_nonce(
+             decrypt_state, reinterpret_cast<noheap::ubyte *>(buffer_nonce.data()),
+             buffer_nonce.size()))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to get decrypt key.");
+    return buffer_nonce;
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::check_encrypt_key() const {
@@ -700,7 +746,7 @@ void noise::noise_context<_config>::get_handshake_message() {
 }
 
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::set_prologue(prologue_extention_type ext) {
+void noise::noise_context<_config>::set_prologue(buffer_prologue_extention_type ext) {
     prologue.ext = std::move(ext);
 
     std::size_t ret;
@@ -717,10 +763,10 @@ noise::noise_context<_config>::buffer_prologue_type
     return buffer_tmp;
 }
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::dh_key_type
+noise::noise_context<_config>::buffer_key_type
     noise::noise_context<_config>::get_remote_public_key() {
-    dh_key_type   buffer_tmp{};
-    NoiseDHState *dh = noise_handshakestate_get_remote_public_key_dh(handshakestate);
+    buffer_key_type buffer_tmp{};
+    NoiseDHState   *dh = noise_handshakestate_get_remote_public_key_dh(handshakestate);
 
     std::size_t ret;
     if ((ret = noise_dhstate_get_public_key(
@@ -745,7 +791,8 @@ noise::noise_context<_config>::hash_state::buffer_type
     return buffer_hash;
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::set_pre_shared_key(const pre_shared_key_type &key) {
+void noise::noise_context<_config>::set_pre_shared_key(
+    const buffer_pre_shared_key_type &key) {
     if (!noise_handshakestate_needs_pre_shared_key(handshakestate))
         return;
 
@@ -757,7 +804,7 @@ void noise::noise_context<_config>::set_pre_shared_key(const pre_shared_key_type
         handle_error(ret, "Failed to set pre shared key.");
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::set_remote_public_key(const dh_key_type &key) {
+void noise::noise_context<_config>::set_remote_public_key(const buffer_key_type &key) {
     if (!noise_handshakestate_needs_remote_public_key(handshakestate))
         return;
 
@@ -782,7 +829,7 @@ void noise::noise_context<_config>::set_local_keypair(const keypair_type &kp) {
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to set local keypair.");
 
-    dh_key_type derived_public_key;
+    buffer_key_type derived_public_key;
     if ((ret = noise_dhstate_get_public_key(
              dh, reinterpret_cast<noheap::ubyte *>(derived_public_key.data()),
              derived_public_key.size()))

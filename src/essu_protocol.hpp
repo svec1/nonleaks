@@ -15,7 +15,6 @@ public:
 
 private:
     void reset_state() {
-        id                            = 0;
         batches_sent_number           = 0;
         batches_received_number       = 0;
         sender_units_number           = 0;
@@ -29,7 +28,6 @@ private:
 
 public:
     const network::buffer_address_type addr;
-    std::uint64_t                      id;
 
 private:
     noise_handshake_context handshake_context;
@@ -59,17 +57,19 @@ public:
                 protocol_type::callback_handle_type callback) const;
 
 public:
-    void register_session_info(session_info_type &session_info, noise::noise_role role,
-                               noise::prologue_extention_type          ext,
-                               const noise_context_type::keypair_type &local_keypair,
-                               const noise_context_type::dh_key_type  &remote_public_key,
-                               const noise::pre_shared_key_type &pre_shared_key) const;
+    void register_session_info(
+        session_info_type &session_info, noise::noise_role role,
+        noise::buffer_prologue_extention_type      ext,
+        const noise_context_type::keypair_type    &local_keypair,
+        const noise_context_type::buffer_key_type &remote_public_key,
+        const noise::buffer_pre_shared_key_type   &pre_shared_key) const;
     void start_handshake(session_info_type &session_info) const;
     void stop_handshake(session_info_type &session_info) const;
 
     noise::noise_role   get_role(const session_info_type &session_info) const;
     noise::noise_action get_handshake_action(const session_info_type &session_info) const;
     std::uint64_t       get_handshake_number(const session_info_type &session_info) const;
+    std::uint64_t       get_handshake_id(const session_info_type &session_info) const;
     bool                can_send_packet(const session_info_type &session_info) const;
     bool                can_receive_packet(const session_info_type &session_info) const;
 
@@ -81,8 +81,7 @@ private:
                                    unit_type::unit_type_enum batch_type,
                                    unit_type::unit_type_enum payload_unit_two_type) const;
     noise::buffer_type<header_data_size> derive_header_obfs_key(
-        typename noise_context_type::cipher_state &header_cipher_state,
-        std::uint64_t                              number) const;
+        typename noise_context_type::cipher_state &header_cipher_state) const;
 
 private:
     mutable session_info_s_type session_info_s;
@@ -174,7 +173,6 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
         if (handshake_already_complete) {
             payload_cipher_state.encrypt_buffer.set(
                 {unit.buffer.data(), unit.buffer.size()}, unit.buffer_size_without_mac);
-            payload_cipher_state.set_encrypt_nonce(unit.header.number);
             payload_cipher_state.encrypt(
                 {reinterpret_cast<noheap::rbyte *>(&unit.header), sizeof(unit.header)});
 
@@ -186,8 +184,7 @@ void essu::protocol_type::prepare(packet_type &pckt, network::buffer_address_typ
         }
 
         // Generates header obfuscation key based on the unit_number
-        auto obfs_key_tmp =
-            derive_header_obfs_key(header_cipher_state, unit.header.number);
+        auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         // Adds header data obfuscation
         std::transform(reinterpret_cast<noheap::rbyte *>(&unit.header),
@@ -230,8 +227,7 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
     for (; session_info.receiver_units_number < available_batches_window_number;
          ++session_info.receiver_units_number) {
         // Generates header obfuscation key based on the possible_unit_number
-        auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state,
-                                                   session_info.receiver_units_number);
+        auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         for (auto &unit : pckt->units) {
             unit_type test_unit = unit;
@@ -258,12 +254,15 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
                 payload_cipher_state.decrypt_buffer.set(
                     {test_unit.buffer.data(), test_unit.buffer.size()},
                     test_unit.buffer.size());
-                payload_cipher_state.set_decrypt_nonce(test_unit.header.number);
                 try {
                     payload_cipher_state.decrypt(
                         {reinterpret_cast<noheap::rbyte *>(&test_unit.header),
                          sizeof(test_unit.header)});
                 } catch (noheap::runtime_error &excp) {
+                    // Gets and increments the decrypt nonce(counter block)
+                    auto buffer_nonce = payload_cipher_state.get_decrypt_nonce();
+                    ++(*reinterpret_cast<std::uint64_t *>(buffer_nonce.data()));
+                    payload_cipher_state.set_decrypt_nonce(buffer_nonce);
                     continue;
                 }
             }
@@ -311,10 +310,10 @@ void essu::protocol_type::handle(packet_type &pckt, network::buffer_address_type
 
 void essu::protocol_type::register_session_info(
     session_info_type &session_info, noise::noise_role role,
-    noise::prologue_extention_type          ext,
-    const noise_context_type::keypair_type &local_keypair,
-    const noise_context_type::dh_key_type  &remote_public_key,
-    const noise::pre_shared_key_type       &pre_shared_key) const {
+    noise::buffer_prologue_extention_type      ext,
+    const noise_context_type::keypair_type    &local_keypair,
+    const noise_context_type::buffer_key_type &remote_public_key,
+    const noise::buffer_pre_shared_key_type   &pre_shared_key) const {
     if (find_session_info(session_info.addr) != session_info_s.end())
         this->log.throw_exception("Session already exist.");
     if (session_info_s.size() == network::max_count_addresses)
@@ -332,25 +331,6 @@ void essu::protocol_type::start_handshake(session_info_type &session_info) const
 }
 void essu::protocol_type::stop_handshake(session_info_type &session_info) const {
     session_info.handshake_context.stop();
-
-    auto unique_value = session_info.handshake_context.get_unique_value();
-    session_info.id   = noheap::represent_bytes<std::uint64_t>(
-        noheap::clip_buffer<sizeof(std::uint64_t), 0>(unique_value));
-
-    const std::uint32_t value1 = noheap::represent_bytes<std::uint32_t>(
-        noheap::clip_buffer<sizeof(std::uint32_t), sizeof(std::uint64_t)>(unique_value));
-    const std::uint32_t value2 = noheap::represent_bytes<std::uint32_t>(
-        noheap::clip_buffer<sizeof(std::uint32_t),
-                            sizeof(std::uint64_t) + sizeof(std::uint32_t)>(unique_value));
-
-    if (session_info.handshake_context.get_role() == noise::noise_role::INITIATOR) {
-        session_info.sender_units_number   = value1;
-        session_info.receiver_units_number = value2;
-    } else {
-        session_info.sender_units_number   = value2;
-        session_info.receiver_units_number = value1;
-    }
-
     ++session_info.handshake_number;
 }
 noise::noise_role
@@ -364,6 +344,10 @@ noise::noise_action essu::protocol_type::get_handshake_action(
 std::uint64_t essu::protocol_type::get_handshake_number(
     const session_info_type &session_info) const {
     return session_info.handshake_number;
+}
+std::uint64_t
+    essu::protocol_type::get_handshake_id(const session_info_type &session_info) const {
+    return session_info.handshake_context.get_handshake_id();
 }
 bool essu::protocol_type::can_send_packet(const session_info_type &session_info) const {
     return !session_info.was_sent_retry;
@@ -393,20 +377,17 @@ void essu::protocol_type::check_protocol_compliance(
         this->log.throw_exception("Expected payload unit.");
 }
 noise::buffer_type<essu::header_data_size> essu::protocol_type::derive_header_obfs_key(
-    typename noise_context_type::cipher_state &header_cipher_state,
-    std::uint64_t                              number) const {
+    typename noise_context_type::cipher_state &header_cipher_state) const {
     noise::buffer_type<sizeof(typename essu::unit_type::header_data_type)
                        + noise_context_type::mac_size>
         obfs_key_tmp{};
     header_cipher_state.encrypt_buffer.set({obfs_key_tmp.data(), obfs_key_tmp.size()},
                                            obfs_key_tmp.size()
                                                - noise_context_type::mac_size);
-
-    header_cipher_state.set_encrypt_nonce(number);
     header_cipher_state.encrypt({});
 
-    return noheap::to_buffer<decltype(derive_header_obfs_key(header_cipher_state,
-                                                             number))>(obfs_key_tmp);
+    return noheap::to_buffer<decltype(derive_header_obfs_key(header_cipher_state))>(
+        obfs_key_tmp);
 }
 
 #endif

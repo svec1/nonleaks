@@ -5,7 +5,8 @@ namespace essu {
 // Noise handshake context for establishing shared secret key
 struct noise_handshake_context {
 public:
-    using buffer_unique_value_type = noise::buffer_type<32>;
+    using buffer_unique_value_type =
+        noise::buffer_type<noise_context_type::nonce_size * 2 + sizeof(std::uint64_t)>;
 
     enum class status_enum : std::size_t {
         hs1 = 0,
@@ -17,10 +18,11 @@ public:
 public:
     noise_handshake_context() = default;
 
-    noise_handshake_context(noise::noise_role role, noise::prologue_extention_type ext,
-                            const noise_context_type::keypair_type &local_keypair,
-                            const noise_context_type::dh_key_type  &remote_public_key,
-                            const noise::pre_shared_key_type       &pre_shared_key);
+    noise_handshake_context(noise::noise_role                          role,
+                            noise::buffer_prologue_extention_type      ext,
+                            const noise_context_type::keypair_type    &local_keypair,
+                            const noise_context_type::buffer_key_type &remote_public_key,
+                            const noise::buffer_pre_shared_key_type   &pre_shared_key);
     noise_handshake_context(noise_handshake_context &&other);
     noise_handshake_context &operator=(noise_handshake_context &&other);
 
@@ -31,8 +33,8 @@ public:
     bool                                       is_complete() const;
     noise::noise_action                        get_action() const;
     noise::noise_role                          get_role() const;
-    buffer_unique_value_type                   get_unique_value() const;
-    const noise_context_type::dh_key_type     &get_remote_public_key() const;
+    std::uint64_t                              get_handshake_id() const;
+    const noise_context_type::buffer_key_type &get_remote_public_key() const;
     typename noise_context_type::cipher_state &get_payload_cipher_state();
     typename noise_context_type::cipher_state &get_header_cipher_state_sender();
     typename noise_context_type::cipher_state &get_header_cipher_state_receiver();
@@ -61,21 +63,22 @@ private:
     typename noise_context_type::random_state random_state;
     noise_context_type::hash_state            hash_state;
 
-    noise::noise_role                role;
-    noise::prologue_extention_type   ext;
-    noise_context_type::keypair_type local_keypair;
-    noise_context_type::dh_key_type  remote_public_key;
-    noise::pre_shared_key_type       pre_shared_key;
+    noise::noise_role                     role;
+    noise::buffer_prologue_extention_type ext;
+    noise_context_type::keypair_type      local_keypair;
+    noise_context_type::buffer_key_type   remote_public_key;
+    noise::buffer_pre_shared_key_type     pre_shared_key;
 
     typename noise::buffer_handshake_packet_type buffer_handshake_message{};
     std::size_t                                  offset_noise_handshake_unit;
     bool                                         fragmentation;
 
-    noise_context_type::dh_key_type                      ephemeral_obfs_key{};
+    noise_context_type::buffer_key_type                  ephemeral_obfs_key{};
     typename noise::buffer_handshake_payload_type        handshake_payload{};
     typename noise_context_type::hash_state::buffer_type handshake_hash{};
     buffer_unique_value_type                             unique_value{};
     buffer_unique_value_type                             unique_value_previous{};
+    std::uint64_t                                        handshake_id;
 };
 
 } // namespace essu
@@ -84,10 +87,10 @@ essu::noise_handshake_context::noise_handshake_context(noise_handshake_context &
                               other.remote_public_key, other.pre_shared_key) {
 }
 essu::noise_handshake_context::noise_handshake_context(
-    noise::noise_role _role, noise::prologue_extention_type _ext,
-    const noise_context_type::keypair_type &_local_keypair,
-    const noise_context_type::dh_key_type  &_remote_public_key,
-    const noise::pre_shared_key_type       &_pre_shared_key)
+    noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
+    const noise_context_type::keypair_type    &_local_keypair,
+    const noise_context_type::buffer_key_type &_remote_public_key,
+    const noise::buffer_pre_shared_key_type   &_pre_shared_key)
     : role(_role), ext(_ext), local_keypair(_local_keypair),
       remote_public_key(_remote_public_key), pre_shared_key(_pre_shared_key) {
 }
@@ -243,11 +246,10 @@ noise::noise_action essu::noise_handshake_context::get_action() const {
 noise::noise_role essu::noise_handshake_context::get_role() const {
     return role;
 }
-essu::noise_handshake_context::buffer_unique_value_type
-    essu::noise_handshake_context::get_unique_value() const {
-    return unique_value;
+std::uint64_t essu::noise_handshake_context::get_handshake_id() const {
+    return handshake_id;
 }
-const essu::noise_context_type::dh_key_type &
+const essu::noise_context_type::buffer_key_type &
     essu::noise_handshake_context::get_remote_public_key() const {
     return remote_public_key;
 }
@@ -284,7 +286,7 @@ void essu::noise_handshake_context::stop() {
     // If local rpk is non empty it checks rpk from handshake, for XX pattern
     if (auto handshake_remote_public_key = noise_ctx.get_remote_public_key();
         handshake_remote_public_key != remote_public_key) {
-        if (remote_public_key == noise_context_type::dh_key_type{})
+        if (remote_public_key == noise_context_type::buffer_key_type{})
             remote_public_key = handshake_remote_public_key;
         else
             this->log.throw_exception("Remote public key from handshake is invalid.");
@@ -324,7 +326,7 @@ void essu::noise_handshake_context::check_noise_action(noise::noise_action expec
 
 // Generates ephemeral header obfuscation key + ephmeral obfuscation key for hs1
 void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
-    typename noise_context_type::dh_key_type public_key{};
+    typename noise_context_type::buffer_key_type public_key{};
     const auto xor_public_key_with_buffer = [&](const auto &buffer) {
         std::transform(public_key.begin(),
                        public_key.begin()
@@ -335,7 +337,7 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     };
 
     // Mixes the empty public key with own and remote public keys
-    if (remote_public_key != noise_context_type::dh_key_type{}) {
+    if (remote_public_key != noise_context_type::buffer_key_type{}) {
         xor_public_key_with_buffer(local_keypair.pub);
         xor_public_key_with_buffer(remote_public_key);
     }
@@ -348,7 +350,7 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
         hash_state.get_hash({public_key.data(), public_key.size()}));
 
     // Generates keystream
-    noise::buffer_type<noheap::buffer_size<noise_context_type::dh_key_type> * 3
+    noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 3
                        + noise_context_type::mac_size>
                                      keystream{};
     noise_context_type::cipher_state cipher_tmp;
@@ -358,11 +360,11 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     cipher_tmp.encrypt({});
 
     auto header_obfs_key1 =
-        noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>, 0>(
+        noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>, 0>(
             keystream);
     auto header_obfs_key2 =
-        noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>,
-                            noheap::buffer_size<noise_context_type::dh_key_type>>(
+        noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
+                            noheap::buffer_size<noise_context_type::buffer_key_type>>(
             keystream);
 
     if (role == noise::noise_role::INITIATOR) {
@@ -374,8 +376,8 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     }
 
     ephemeral_obfs_key =
-        noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>,
-                            noheap::buffer_size<noise_context_type::dh_key_type> * 2>(
+        noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
+                            noheap::buffer_size<noise_context_type::buffer_key_type> * 2>(
             keystream);
 }
 
@@ -391,34 +393,64 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
     std::decay_t<decltype(handshake_hash)> unique_value_two;
     hash_state.hkdf({handshake_hash.data(), handshake_hash.size()},
                     {handshake_payload.data(), handshake_payload.size()},
-                    {unique_value_two.data(), unique_value_two.size()},
-                    {unique_value.data(), unique_value.size()});
+                    {unique_value.data(), unique_value.size()},
+                    {unique_value_two.data(), unique_value_two.size()});
+    // Handles the first unique_value
+    {
+        handshake_id = noheap::represent_bytes<std::uint64_t>(
+            noheap::clip_buffer<sizeof(std::uint64_t), 0>(unique_value));
 
-    // Generates keystream - the header obfuscation key
-    noise::buffer_type<noheap::buffer_size<noise_context_type::dh_key_type> * 2
-                       + noise_context_type::mac_size>
-                                     keystream{};
-    noise_context_type::cipher_state cipher_tmp;
-    cipher_tmp.set_encrypt_key(
-        noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>, 0>(
-            unique_value_two));
-    cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
-                                  keystream.size() - noise_context_type::mac_size);
-    cipher_tmp.encrypt({});
+        noise_context_type::buffer_nonce_type value1 =
+            noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
+                noheap::clip_buffer<noise_context_type::nonce_size,
+                                    sizeof(std::uint64_t)>(unique_value));
+        noise_context_type::buffer_nonce_type value2 =
+            noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
+                noheap::clip_buffer<noise_context_type::nonce_size,
+                                    sizeof(std::uint64_t)
+                                        + noise_context_type::nonce_size>(unique_value));
 
-    auto header_obfs_key1 =
-        noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>, 0>(
-            keystream);
-    auto header_obfs_key2 =
-        noheap::clip_buffer<noheap::buffer_size<noise_context_type::dh_key_type>,
-                            noheap::buffer_size<noise_context_type::dh_key_type>>(
-            keystream);
+        // Maximum initial value of nonce(counter block) is 2^48−1
+        (*reinterpret_cast<std::uint64_t *>(value1.data())) >>= 16;
+        (*reinterpret_cast<std::uint64_t *>(value2.data())) >>= 16;
 
-    if (role == noise::noise_role::INITIATOR) {
-        header_cipher_state_sender.set_encrypt_key(header_obfs_key1);
-        header_cipher_state_receiver.set_encrypt_key(header_obfs_key2);
-    } else {
-        header_cipher_state_sender.set_encrypt_key(header_obfs_key2);
-        header_cipher_state_receiver.set_encrypt_key(header_obfs_key1);
+        if (get_role() == noise::noise_role::INITIATOR) {
+            payload_cipher_state.set_encrypt_nonce(value1);
+            payload_cipher_state.set_decrypt_nonce(value2);
+        } else {
+            payload_cipher_state.set_encrypt_nonce(value2);
+            payload_cipher_state.set_decrypt_nonce(value1);
+        }
+    }
+
+    // Handles the second unique_value
+    {
+        // Generates keystream - the header obfuscation key
+        noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 2
+                           + noise_context_type::mac_size>
+                                         keystream{};
+        noise_context_type::cipher_state cipher_tmp;
+        cipher_tmp.set_encrypt_key(
+            noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
+                                0>(unique_value_two));
+        cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
+                                      keystream.size() - noise_context_type::mac_size);
+        cipher_tmp.encrypt({});
+
+        auto header_obfs_key1 =
+            noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
+                                0>(keystream);
+        auto header_obfs_key2 =
+            noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
+                                noheap::buffer_size<noise_context_type::buffer_key_type>>(
+                keystream);
+
+        if (role == noise::noise_role::INITIATOR) {
+            header_cipher_state_sender.set_encrypt_key(header_obfs_key1);
+            header_cipher_state_receiver.set_encrypt_key(header_obfs_key2);
+        } else {
+            header_cipher_state_sender.set_encrypt_key(header_obfs_key2);
+            header_cipher_state_receiver.set_encrypt_key(header_obfs_key1);
+        }
     }
 }

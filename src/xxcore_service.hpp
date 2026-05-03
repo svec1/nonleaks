@@ -40,10 +40,10 @@ private:
 };
 
 struct config_type {
-    noise::noise_role                      role;
-    essu::noise_context_type::keypair_type keypair;
-    essu::noise_context_type::dh_key_type  rpubk;
-    essu::noise_context_type::dh_key_type  psk;
+    noise::noise_role                         role;
+    essu::noise_context_type::keypair_type    keypair;
+    essu::noise_context_type::buffer_key_type rpubk;
+    essu::noise_context_type::buffer_key_type psk;
 };
 
 struct json_config {
