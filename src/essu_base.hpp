@@ -7,17 +7,18 @@
 
 namespace essu {
 
-constexpr std::size_t packet_size                     = 1376;
-constexpr std::size_t header_data_size                = 16;
-constexpr std::size_t min_random_bytes_number         = 64;
-constexpr std::size_t batch_units_number              = 4;
-constexpr std::size_t units_per_rekey_number          = 17;
-constexpr std::size_t batches_window_number           = 16;
-constexpr std::size_t max_undecrypted_batches_number  = 16;
-constexpr std::size_t max_available_batches_number    = 10;
-constexpr std::size_t max_available_handshakes_number = 10000;
-constexpr std::size_t unit_size                       = packet_size / batch_units_number;
-constexpr std::size_t buffer_data_size                = unit_size - header_data_size;
+constexpr std::size_t packet_size                    = 1376;
+constexpr std::size_t header_data_size               = 16;
+constexpr std::size_t min_random_bytes_number        = 64;
+constexpr std::size_t batch_units_number             = 4;
+constexpr std::size_t unit_per_rekey_number          = 17;
+constexpr std::size_t batch_window_number            = 64;
+constexpr std::size_t max_undecrypted_batch_number   = 16;
+constexpr std::size_t max_available_batch_number     = 10;
+constexpr std::size_t max_available_handshake_number = 10000;
+constexpr std::size_t max_session_number             = 4;
+constexpr std::size_t unit_size                      = packet_size / batch_units_number;
+constexpr std::size_t buffer_data_size               = unit_size - header_data_size;
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;
 
 static constexpr noise::noise_context_config<
@@ -55,9 +56,9 @@ public:
     };
 
 public:
-    static constexpr std::size_t buffer_size_without_mac =
-        buffer_data_size - noise::get_mac_size<noise_config.cipher>();
-
+    constexpr std::size_t buffer_size_without_mac() {
+        return buffer_data_size - noise::get_mac_size<noise_config.cipher>();
+    }
     static_assert(sizeof(header_data_type) == header_data_size,
                   "Header size is invalid.");
 

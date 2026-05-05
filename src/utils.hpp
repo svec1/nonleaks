@@ -274,10 +274,10 @@ struct basic_array {
     friend struct pseudoheap_monotonic_array<_buffer_size>;
 
 public:
-    static constexpr std::size_t buffer_size = _buffer_size;
+    static constexpr std::size_t buffer_size() { return _buffer_size; }
 
     using value_type  = T;
-    using buffer_type = std::array<value_type, buffer_size>;
+    using buffer_type = std::array<value_type, buffer_size()>;
 
 protected:
     buffer_type buffer{};
@@ -291,17 +291,34 @@ private:
 public:
     pseudoheap_monotonic_array() = default;
 
-public:
+protected:
     template<typename T>
         requires std::is_pointer<T>::value
     T malloc(std::size_t area_size) {
-        if (offset + area_size >= basic_array_type::buffer_size)
+        if (offset + area_size >= this->buffer_size())
             throw runtime_error("Pseudoheap is full. Last request: {}", area_size);
 
         typename basic_array_type::value_type *ptr = this->array.buffer.data() + offset;
         offset += area_size;
         return reinterpret_cast<T>(ptr);
     }
+
+    void free_last(std::size_t area_size) {
+        if (area_size > offset)
+            throw runtime_error("Invalid area size: {}", area_size);
+
+        offset -= area_size;
+    }
+
+    template<typename T, typename _T>
+        requires std::is_pointer<T>::value
+    decltype(auto) data(this _T &&_this) {
+        return reinterpret_cast<T>(_this.array.buffer.data());
+    }
+
+public:
+    std::size_t buffer_size() const { return basic_array_type::buffer_size(); }
+    std::size_t size() const { return this->buffer_size() - offset; }
 
 private:
     basic_array_type array;
@@ -355,20 +372,19 @@ public:
     const_iterator bend() const { return this->buffer.end(); }
     const_iterator cbegin() const { return this->buffer.begin(); }
     const_iterator cend() const { return this->buffer.begin() + count_pushed; }
-    const_iterator cbend() const { return this->buffer.end(); }
 
 public:
     template<typename _T>
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push_back(_T &&el) {
-        if (count_pushed == monotonic_array::buffer_size)
+        if (count_pushed == this->buffer_size())
             throw runtime_error("Buffer overflow.");
         this->buffer[count_pushed++] = std::forward<_T>(el);
     }
     template<typename... Args>
         requires std::constructible_from<std::decay_t<T>, Args...>
     void emplace(iterator it, Args &&...args) {
-        if (count_pushed == monotonic_array::buffer_size)
+        if (count_pushed == this->buffer_size())
             throw runtime_error("Buffer overflow.");
         else if (it >= this->buffer.end())
             throw runtime_error("Invalid access.");
@@ -380,7 +396,7 @@ public:
         ++count_pushed;
     }
     iterator erase(iterator it) {
-        if (count_pushed == monotonic_array::buffer_size)
+        if (count_pushed == this->buffer_size())
             throw runtime_error("Buffer overflow.");
         else if (it >= this->buffer.end())
             throw runtime_error("Invalid access.");
@@ -438,32 +454,118 @@ public:
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push(_T &&el) {
         this->buffer[back] = std::forward<_T>(el);
-        back               = (back + 1) % ring_buffer::buffer_size;
+        back               = (back + 1) % this->buffer_size();
 
-        if (count_pushed < ring_buffer::buffer_size)
+        if (count_pushed < this->buffer_size())
             ++count_pushed;
         else
-            front = (front + 1) % ring_buffer::buffer_size;
+            front = (front + 1) % this->buffer_size();
     }
     T pop() {
         if (!count_pushed)
             return {};
 
         typename ring_buffer::value_type tmp = std::move(this->buffer[front]);
-        front                                = (front + 1) % ring_buffer::buffer_size;
+        front                                = (front + 1) % this->buffer_size();
         --count_pushed;
         return tmp;
     }
 
 public:
-    std::size_t                        size() const { return count_pushed; }
-    ring_buffer::buffer_type::iterator lbegin() { return this->buffer.begin(); }
-    ring_buffer::buffer_type::iterator lend() {
-        return this->buffer.begin() + count_pushed;
-    }
+    std::size_t    size() const { return count_pushed; }
+    decltype(auto) begin() { return this->buffer.begin(); }
+    decltype(auto) end() { return this->buffer.begin() + count_pushed; }
 
 private:
     std::size_t back = 0, front = 0, count_pushed = 0;
+};
+
+template<typename T, std::size_t _buffer_size>
+class monotonic_placement_new_array
+    : public pseudoheap_monotonic_array<sizeof(T) * _buffer_size> {
+public:
+    using value_type = T;
+
+public:
+    constexpr monotonic_placement_new_array() = default;
+    monotonic_placement_new_array(std::initializer_list<T> list) {
+        for (const auto &it : list)
+            this->emplace_back(it);
+    }
+
+public:
+    class iterator {
+    public:
+        explicit iterator(monotonic_placement_new_array<T, _buffer_size> &_array,
+                          std::size_t                                     _it)
+            : array(_array), it(_it) {}
+        decltype(auto) operator++() {
+            ++it;
+            return *this;
+        }
+        auto operator++(int) {
+            iterator retval = *this;
+            ++(*this);
+            return retval;
+        }
+        decltype(auto) operator==(iterator other) const { return it == other.it; }
+        decltype(auto) operator!=(iterator other) const { return !(*this == other); }
+        decltype(auto) operator*() const { return array.get().at(it); }
+
+    private:
+        std::reference_wrapper<monotonic_placement_new_array<T, _buffer_size>> array;
+        std::size_t                                                            it;
+    };
+
+    iterator begin() { return iterator(*this, 0); }
+    iterator end() { return iterator(*this, this->size()); }
+
+public:
+    template<typename _T, typename... Args>
+        requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
+    void emplace_back(_T &&el) {
+        if (count_pushed == this->buffer_size())
+            throw runtime_error("Buffer overflow.");
+
+        decltype(auto) storage_p = this->template malloc<rbyte *>(sizeof(T));
+        ::new (reinterpret_cast<void *>(storage_p)) T(std::forward<_T>(el));
+        ++count_pushed;
+    }
+    template<typename... Args>
+    void emplace_back(Args &&...args) {
+        if (count_pushed == this->buffer_size())
+            throw runtime_error("Buffer overflow.");
+
+        decltype(auto) storage_p = this->template malloc<rbyte *>(sizeof(T));
+        ::new (reinterpret_cast<void *>(storage_p)) T(std::forward<Args>(args)...);
+        ++count_pushed;
+    }
+    void erase_back() {
+        if (count_pushed == 0)
+            throw runtime_error("Invalid access.");
+
+        this->free_last();
+        --count_pushed;
+    }
+
+    std::size_t size() const { return count_pushed; }
+
+public:
+    template<typename _T>
+    decltype(auto) at(this _T &&_this, std::size_t it) {
+        if (it >= _this.count_pushed)
+            throw runtime_error("Invalid access.");
+
+        return _this.operator[](it);
+    }
+
+    template<typename _T>
+    decltype(auto) operator[](this _T &&_this, std::size_t it) {
+        return *(_this.template data<T *>() + sizeof(T) * it);
+    }
+
+private:
+    std::size_t count_pushed = 0;
 };
 
 template<typename T, typename TSequence_number_type, std::size_t _buffer_size>

@@ -161,9 +161,12 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
         fragmentation            = true;
         return;
     }
+
+    std::size_t random_bytes_size =
+        (offset_noise_handshake_unit - noise_ctx.get_handshake_buffer().get().size);
     random_state.padding_buffer.set(
-        {payload_unit.buffer.data(), payload_unit.buffer.size()},
-        offset_noise_handshake_unit - noise_ctx.get_handshake_buffer().get().size);
+        {payload_unit.buffer.data(), payload_unit.buffer.size() - random_bytes_size},
+        random_bytes_size);
 
     buffer_handshake_message    = {};
     offset_noise_handshake_unit = 0;

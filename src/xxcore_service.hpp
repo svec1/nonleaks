@@ -10,35 +10,6 @@
 
 using namespace boost;
 
-// For test
-struct test_action final : network::action<essu::packet_type> {
-    static constexpr std::size_t max_stream_size = 32;
-
-    using audio_flow_type = audio_flow<max_stream_size>;
-
-public:
-    void init_packet(test_action::packet_type &pckt) {
-        audio_flow_type::buffer_type buffer_tmp{};
-        audio.pop(buffer_tmp);
-        pckt->units[0].header.type = decltype(pckt->units[0].header.type)::data;
-        std::copy(reinterpret_cast<noheap::rbyte *>(buffer_tmp.begin()),
-                  reinterpret_cast<noheap::rbyte *>(buffer_tmp.end()),
-                  pckt->units[0].buffer.begin());
-        for (std::size_t i = 1; i < pckt->units.size(); ++i)
-            pckt->units[i].header.type = decltype(pckt->units[0].header.type)::dummy;
-    }
-    void process_packet(test_action::packet_type &&pckt) {
-        audio_flow_type::buffer_type buffer_tmp;
-        std::copy(pckt->units[0].buffer.begin(),
-                  pckt->units[0].buffer.begin() + buffer_tmp.size(),
-                  reinterpret_cast<noheap::rbyte *>(buffer_tmp.begin()));
-        audio.push(std::move(buffer_tmp), false);
-    }
-
-private:
-    audio_flow_type audio;
-};
-
 struct config_type {
     noise::noise_role                         role;
     essu::noise_context_type::keypair_type    keypair;
@@ -75,12 +46,11 @@ private:
 
 class xxcore_service {
 public:
-    static constexpr std::size_t workers_number = network::max_count_addresses + 2;
+    static constexpr std::size_t workers_number = essu::max_session_number + 2;
 
-    using udp_stream   = network::udp_stream<test_action, network::ipv::v4>;
+    using udp_stream   = network::udp_stream<essu::session_handler, network::ipv::v4>;
     using address_type = udp_stream::address_type;
     using port_type    = udp_stream::port_type;
-    using session_type = essu::session<udp_stream>;
 
 public:
     xxcore_service(config_type &config, address_type &&_addr, asio::ip::port_type _port);
@@ -118,20 +88,14 @@ void xxcore_service::run() {
             stream.close();
         });
 
-        stream.register_address(addr);
-        stream.register_async_send();
-        stream.register_async_receive();
-
         // Tests
-        session_type session_test(stream, addr, config.role, {}, config.keypair,
-                                  config.rpubk, config.psk);
+        stream.get_action().register_session(stream.get_address_bytes(addr), config.role,
+                                             {}, config.keypair, config.rpubk,
+                                             config.psk);
 
-        do {
-            session_test.establish_connection();
-            session_test.register_connection();
-
-            session_test.wait();
-        } while (!session_test.is_failed());
+        stream.register_async_send<essu::wrapper_packet_type>();
+        stream.register_async_receive<essu::wrapper_packet_type>();
+        stream.get_action().run();
     }
 
     for (auto &worker : workers)

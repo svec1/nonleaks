@@ -7,174 +7,182 @@ using namespace boost;
 
 namespace essu {
 
-template<network::Udp_stream TStream>
-class session {
-public:
-    using udp_stream = TStream;
+class session_handler : public network::action<packet_type> {
+    static constexpr std::size_t max_buffered_packet_number = 16;
+    using session_s_type =
+        noheap::monotonic_placement_new_array<session_info_type, max_session_number>;
 
 public:
-    session(udp_stream &_stream, udp_stream::address_type _remote_addr,
-            noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
-            const noise_context_type::keypair_type    &_local_keypair,
-            const noise_context_type::buffer_key_type &_remote_public_key,
-            const noise::buffer_pre_shared_key_type   &_pre_shared_key);
+    void register_session(network::buffer_address_type               remote_addr,
+                          noise::noise_role                          role,
+                          noise::buffer_prologue_extention_type      ext,
+                          const noise_context_type::keypair_type    &local_keypair,
+                          const noise_context_type::buffer_key_type &remote_public_key,
+                          const noise::buffer_pre_shared_key_type   &pre_shared_key);
+    void set_running(bool value);
+    void run();
 
 public:
-    // Establishes connection with node(remote_addr): performs noise handshake
-    void establish_connection();
-    void register_connection();
-    void wait();
-    void terminate();
-
-    bool is_running() const;
-    bool is_failed() const;
+    void                         init_packet(packet_type &pckt);
+    void                         process_packet(packet_type &&pckt);
+    network::buffer_address_type get_remote_address();
+    void                         set_error(const noheap::runtime_error &_excp);
 
 private:
-    void send();
-    void receive();
-
-    void self_post(std::function<bool()> func);
+    essu::session_handler::session_s_type::iterator find_session(packet_type &pckt);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("ESSU_SESSION");
+        noheap::log_impl::create_owner("ESSU_SESSION_HANDLER");
     static constexpr log_handler log{buffer_owner};
 
 private:
-    udp_stream       &stream;
-    session_info_type info;
+    session_s_type session_s;
 
-    noheap::buffer_chars_type<
-        noheap::buffer_size<typename network::buffer_address_v<TStream::v>::type> * 2>
-                           buffer_hex_remote_addr;
-    const std::string_view hex_remote_addr{buffer_hex_remote_addr};
+    std::mutex               m_run;
+    std::condition_variable  cv_run;
+    std::condition_variable  cv_io;
+    std::size_t              session_it_for_send     = 0;
+    session_s_type::iterator current_session_info_it = session_s.end();
 
-    std::atomic<bool>        running = false;
-    std::atomic<bool>        failed  = false;
-    std::atomic<std::size_t> io_stop = 0; // 2 - is full stop
-
-    std::optional<noheap::runtime_error> excp;
+    std::atomic<bool>     running = true;
+    noheap::runtime_error excp;
 };
 } // namespace essu
 
-template<network::Udp_stream TStream>
-essu::session<TStream>::session(
-    udp_stream &_stream, udp_stream::address_type _remote_addr, noise::noise_role _role,
-    noise::buffer_prologue_extention_type      _ext,
-    const noise_context_type::keypair_type    &_local_keypair,
-    const noise_context_type::buffer_key_type &_remote_public_key,
-    const noise::buffer_pre_shared_key_type   &_pre_shared_key)
-    : stream(_stream), info(stream.get_address_bytes(_remote_addr)),
-      buffer_hex_remote_addr(
-          noheap::clip_buffer<noheap::buffer_size<decltype(buffer_hex_remote_addr)>, 0>(
-              noheap::hex_encode(info.addr))) {
+void essu::session_handler::register_session(
+    network::buffer_address_type remote_addr, noise::noise_role role,
+    noise::buffer_prologue_extention_type      ext,
+    const noise_context_type::keypair_type    &local_keypair,
+    const noise_context_type::buffer_key_type &remote_public_key,
+    const noise::buffer_pre_shared_key_type   &pre_shared_key) {
+    std::lock_guard<std::mutex> m_run_lock(m_run);
+
+    session_s.emplace_back(remote_addr);
+
+    decltype(auto) session_info = session_s.at(session_s.size() - 1);
     essu::wrapper_packet_type::get_protocol().register_session_info(
-        info, _role, _ext, _local_keypair, _remote_public_key, _pre_shared_key);
+        session_info, role, ext, local_keypair, remote_public_key, pre_shared_key);
 }
-template<network::Udp_stream TStream>
-void essu::session<TStream>::establish_connection() {
-    try {
-        decltype(auto) protocol = essu::wrapper_packet_type::get_protocol();
-        decltype(protocol.get_handshake_action(info)) action;
+void essu::session_handler::set_running(bool value) {
+    running = value;
+}
+void essu::session_handler::run() {
+    decltype(auto) protocol = essu::wrapper_packet_type::get_protocol();
 
-        // Performs noise handshake
-        protocol.start_handshake(info);
-        while ((action = protocol.get_handshake_action(info))
-               != noise::noise_action::SPLIT) {
-            if (action == noise::noise_action::WRITE_MESSAGE)
-                send();
-            else if (action == noise::noise_action::READ_MESSAGE)
-                receive();
-        }
-        protocol.stop_handshake(info);
+    // Locks run_m and wait cv_run notify
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+    cv_run.wait(m_run_lock, [this] {
+        if (!running)
+            return true;
 
-        log.to_all("Number of handshake: {}", protocol.get_handshake_number(info));
-    } catch (const noheap::runtime_error &excp) {
-        failed.store(true);
-        log.throw_exception<noheap::runtime_error>("Failed to establish connection [{}]",
-                                                   excp.what());
+        decltype(auto) session_info   = *current_session_info_it;
+        decltype(auto) session_action = protocol.get_handshake_action(session_info);
+
+        if (session_action == noise::noise_action::SPLIT)
+            protocol.stop_handshake(session_info);
+
+        if (session_action == noise::noise_action::NONE
+            && !protocol.can_send_packet(session_info)
+            && !protocol.can_receive_packet(session_info))
+            protocol.start_handshake(session_info);
+
+        current_session_info_it = session_s.end();
+        cv_io.notify_all();
+        return false;
+    });
+
+    if (!running)
+        throw excp;
+}
+void essu::session_handler::init_packet(packet_type &pckt) {
+    decltype(auto) protocol = essu::wrapper_packet_type::get_protocol();
+    std::decay_t<decltype(current_session_info_it)> session_info_it = session_s.end();
+    {
+        // Locks run_m and finds a registered session
+        std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+        session_info_it             = this->find_session(pckt);
+        decltype(auto) session_info = *session_info_it;
+
+        // Sets current session for possible work in the run-thread
+        current_session_info_it = session_info_it;
+        cv_run.notify_one();
+
+        // Waits when session can send packet
+        cv_io.wait(m_run_lock,
+                   [&session_info] { return protocol.can_send_packet(session_info); });
+    }
+
+    // Initializes the packet
+    decltype(auto) session_info   = *session_info_it;
+    decltype(auto) session_action = protocol.get_handshake_action(session_info);
+    if (session_action == noise::noise_action::WRITE_MESSAGE)
+        session_info.handshake_context.init_packet(pckt);
+    else {
+        for (std::size_t i = 0; i < pckt->units.size(); ++i)
+            pckt->units[i].header.type = decltype(pckt->units[0].header.type)::dummy;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 }
+void essu::session_handler::process_packet(packet_type &&pckt) {
+    decltype(auto) protocol = essu::wrapper_packet_type::get_protocol();
+    std::decay_t<decltype(current_session_info_it)> session_info_it = session_s.end();
+    {
+        // Locks run_m and finds a registered session
+        std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+        session_info_it             = this->find_session(pckt);
+        decltype(auto) session_info = *session_info_it;
 
-template<network::Udp_stream TStream>
-void essu::session<TStream>::register_connection() {
-    if (!essu::wrapper_packet_type::get_protocol().can_send_packet(info)
-        || !essu::wrapper_packet_type::get_protocol().can_receive_packet(info))
-        log.throw_exception<noheap::runtime_error>("Failed to register connection.");
+        // Sets current session for possible work in the run-thread
+        current_session_info_it = session_info_it;
+        cv_run.notify_one();
 
-    io_stop.store(0);
-    running.store(true);
+        // Waits when session can send packet
+        cv_io.wait(m_run_lock,
+                   [&session_info] { return protocol.can_receive_packet(session_info); });
+    }
 
-    self_post([this] {
-        this->send();
-        return this->running.load()
-               && essu::wrapper_packet_type::get_protocol().can_send_packet(this->info);
-    });
-    self_post([this] {
-        this->receive();
-        return this->running.load()
-               && essu::wrapper_packet_type::get_protocol().can_receive_packet(
-                   this->info);
-    });
-}
-template<network::Udp_stream TStream>
-void essu::session<TStream>::self_post(std::function<bool()> func) {
-    asio::post(stream.get_executor(), [this, func] {
-        const auto stop_post = [this] {
-            ++this->io_stop;
-            if (this->io_stop == 2 || this->failed)
-                this->running = false;
-            this->io_stop.notify_all();
-        };
+    // Initializes the packet
+    decltype(auto) session_info   = *session_info_it;
+    decltype(auto) session_action = protocol.get_handshake_action(session_info);
+    if (session_action == noise::noise_action::READ_MESSAGE) {
+        session_info.handshake_context.process_packet(std::move(pckt));
 
-        try {
-            if (func())
-                this->self_post(func);
-            else
-                stop_post();
-        } catch (const noheap::runtime_error &_excp) {
-            if (!excp)
-                excp = _excp;
-            this->failed = true;
-            stop_post();
-        } catch (...) {
-            this->failed = true;
-            stop_post();
-            throw;
+        session_action = protocol.get_handshake_action(session_info);
+        if (session_action != noise::noise_action::READ_MESSAGE) {
+            std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+            current_session_info_it = session_info_it;
+            cv_run.notify_one();
         }
-    });
+    }
 }
-template<network::Udp_stream TStream>
-void essu::session<TStream>::wait() {
-    io_stop.wait(0);
-    io_stop.wait(1);
-    if (excp)
-        throw *excp;
+network::buffer_address_type essu::session_handler::get_remote_address() {
+    std::lock_guard<std::mutex> m_run_lock(m_run);
+    if (!session_s.size())
+        throw noheap::runtime_error("No registered session.");
+
+    if (session_it_for_send == session_s.size())
+        session_it_for_send = 0;
+    return session_s.at(session_it_for_send++).addr;
 }
-template<network::Udp_stream TStream>
-void essu::session<TStream>::terminate() {
-    running.store(false);
-}
-template<network::Udp_stream TStream>
-bool essu::session<TStream>::is_running() const {
-    return running.load();
-}
-template<network::Udp_stream TStream>
-bool essu::session<TStream>::is_failed() const {
-    return failed.load();
+void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
+    std::lock_guard<std::mutex> m_run_lock(m_run);
+    excp    = _excp;
+    running = false;
+    cv_run.notify_one();
 }
 
-template<network::Udp_stream TStream>
-void essu::session<TStream>::send() {
-    stream.template send_to<essu::wrapper_packet_type>(
-        TStream::get_address_object(info.addr));
-}
+essu::session_handler::session_s_type::iterator
+    essu::session_handler::find_session(packet_type &pckt) {
+    decltype(auto) it =
+        std::find_if(session_s.begin(), session_s.end(),
+                     [addr = pckt.get_address()](const session_info_type &el) {
+                         return el.addr == addr;
+                     });
+    if (it == session_s.end())
+        throw noheap::runtime_error("Invalid packet address.");
 
-template<network::Udp_stream TStream>
-void essu::session<TStream>::receive() {
-    if (!stream.template receive_from<essu::wrapper_packet_type>(
-            TStream::get_address_object(info.addr)))
-        log.throw_exception<noheap::runtime_error>("Timeout has been reached.");
+    return it;
 }
 
 #endif
