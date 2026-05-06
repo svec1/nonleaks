@@ -40,14 +40,6 @@ concept Packet_native_t =
     std::same_as<std::decay_t<T>,
                  packet_native_type<typename std::decay_t<T>::extention_data_type>>;
 
-template<Packet_native_t T, noheap::log_impl::owner_impl::buffer_type _buffer_owner>
-struct protocol_native_type;
-template<typename T>
-concept Derived_from_protocol_native_t =
-    std::derived_from<std::decay_t<T>,
-                      protocol_native_type<typename std::decay_t<T>::packet_type,
-                                           std::decay_t<T>::buffer_owner>>;
-
 template<Packet_native_t TPacket>
 struct action;
 template<typename T>
@@ -132,51 +124,6 @@ protected:
     static constexpr log_handler log{buffer_owner};
 };
 
-template<Packet_native_t TPacket_internal, Derived_from_protocol_native_t TProtocol>
-    requires std::same_as<TPacket_internal, typename TProtocol::packet_type>
-class wrapper_packet final : public TPacket_internal {
-public:
-    using packet_type   = TPacket_internal;
-    using protocol_type = TProtocol;
-
-public:
-    wrapper_packet() = default;
-    wrapper_packet(packet_type &&pckt) : packet_type(pckt) {}
-
-public:
-    template<typename TFunc_callback>
-    static void prepare(packet_type &pckt, TFunc_callback &&callback) {
-        prt.prepare(pckt, std::forward<TFunc_callback>(callback));
-    }
-    template<typename TFunc_callback>
-    static void handle(packet_type &&pckt, TFunc_callback &&callback) {
-        prt.handle(std::move(pckt), std::forward<TFunc_callback>(callback));
-    }
-
-public:
-    template<typename TSelf>
-    decltype(auto) get_native_packet(this TSelf &&self) {
-        return *static_cast<std::conditional_t<
-            std::is_const_v<TSelf>, const typename std::decay_t<TSelf>::packet_type *,
-            typename std::decay_t<TSelf>::packet_type *>>(&self);
-    }
-    static constexpr const protocol_type &get_protocol() { return prt; }
-
-private:
-    static constexpr protocol_type prt{};
-};
-
-template<typename T>
-concept Wrapper_packet =
-    std::same_as<std::decay_t<T>,
-                 wrapper_packet<typename std::decay_t<T>::packet_type,
-                                typename std::decay_t<T>::protocol_type>>;
-template<typename TPacket, typename TAction>
-concept Compatible_wrapper_packet_with_action =
-    Wrapper_packet<TPacket> && Derived_from_action<TAction>
-    && std::same_as<typename std::decay_t<TAction>::packet_type,
-                    typename std::decay_t<TPacket>::packet_type>;
-
 template<Derived_from_action Action, ipv _v>
 class udp_stream;
 
@@ -223,9 +170,7 @@ public:
         running.store(false);
     }
 
-    template<Compatible_wrapper_packet_with_action<Action> TWrapper_packet>
     void register_async_send();
-    template<Compatible_wrapper_packet_with_action<Action> TWrapper_packet>
     void register_async_receive();
 
     static buffer_address_type get_address_bytes(address_type addr);
@@ -272,7 +217,6 @@ udp_stream<Action, v>::~udp_stream() {
 }
 
 template<Derived_from_action Action, ipv v>
-template<Compatible_wrapper_packet_with_action<Action> TWrapper_packet>
 void udp_stream<Action, v>::register_async_send() {
     // TODO: supporting pseudo proxy such as obfs4 or webtunnel
     if (!running.load())
@@ -287,8 +231,7 @@ void udp_stream<Action, v>::register_async_send() {
             pckt.set_address(act.get_remote_address());
 
             // Performs init a packet base on TWrapper_packet protocol
-            std::decay_t<TWrapper_packet>::prepare(
-                pckt, std::bind(&Action::init_packet, &this->act, std::placeholders::_1));
+            act.init_packet(pckt);
 
             // Sends the packet
             this->socket.send_to(
@@ -302,11 +245,10 @@ void udp_stream<Action, v>::register_async_send() {
             return;
         }
 
-        this->register_async_send<TWrapper_packet>();
+        this->register_async_send();
     });
 }
 template<Derived_from_action Action, ipv v>
-template<Compatible_wrapper_packet_with_action<Action> TWrapper_packet>
 void udp_stream<Action, v>::register_async_receive() {
     if (!running.load())
         return;
@@ -323,16 +265,14 @@ void udp_stream<Action, v>::register_async_receive() {
                     this->get_address_object(receive_endpoint.address())));
 
                 // Handles the packet TWrapper_packet protocol
-                std::decay_t<TWrapper_packet>::handle(std::move(this->receive_pckt),
-                                                      std::bind(&Action::process_packet,
-                                                                &this->act,
-                                                                std::placeholders::_1));
+                act.process_packet(std::move(receive_pckt));
+
             } catch (const noheap::runtime_error &_excp) {
                 act.set_error(_excp);
                 return;
             }
 
-            this->register_async_receive<TWrapper_packet>();
+            this->register_async_receive();
         });
 }
 

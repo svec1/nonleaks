@@ -521,7 +521,7 @@ public:
     iterator end() { return iterator(*this, this->size()); }
 
 public:
-    template<typename _T, typename... Args>
+    template<typename _T>
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void emplace_back(_T &&el) {
         if (count_pushed == this->buffer_size())

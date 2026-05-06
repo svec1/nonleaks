@@ -93,8 +93,8 @@ void xxcore_service::run() {
                                              {}, config.keypair, config.rpubk,
                                              config.psk);
 
-        stream.register_async_send<essu::wrapper_packet_type>();
-        stream.register_async_receive<essu::wrapper_packet_type>();
+        stream.register_async_send();
+        stream.register_async_receive();
         stream.get_action().run();
     }
 

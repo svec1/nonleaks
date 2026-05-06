@@ -4,7 +4,7 @@ namespace essu {
 
 // Noise handshake context for establishing shared secret key
 struct noise_handshake_context {
-public:
+private:
     using buffer_unique_value_type =
         noise::buffer_type<noise_context_type::nonce_size * 2 + sizeof(std::uint64_t)>;
 
@@ -12,19 +12,17 @@ public:
         hs1 = 0,
         hs2,
         hs3,
+        needs_complete,
         is_complete,
     };
 
 public:
-    noise_handshake_context() = default;
-
-    noise_handshake_context(noise::noise_role                          role,
-                            noise::buffer_prologue_extention_type      ext,
-                            const noise_context_type::keypair_type    &local_keypair,
-                            const noise_context_type::buffer_key_type &remote_public_key,
-                            const noise::buffer_pre_shared_key_type   &pre_shared_key);
+    noise_handshake_context(noise::noise_role                          _role,
+                            noise::buffer_prologue_extention_type      _ext,
+                            const noise_context_type::buffer_key_type &_remote_public_key,
+                            const noise::buffer_pre_shared_key_type   &_pre_shared_key,
+                            const noise_context_type::keypair_type    &_local_keypair);
     noise_handshake_context(noise_handshake_context &&other);
-    noise_handshake_context &operator=(noise_handshake_context &&other);
 
 public:
     void init_packet(packet_type &pckt);
@@ -63,11 +61,11 @@ private:
     typename noise_context_type::random_state random_state;
     noise_context_type::hash_state            hash_state;
 
-    noise::noise_role                     role;
-    noise::buffer_prologue_extention_type ext;
-    noise_context_type::keypair_type      local_keypair;
-    noise_context_type::buffer_key_type   remote_public_key;
-    noise::buffer_pre_shared_key_type     pre_shared_key;
+    noise::noise_role                       role;
+    noise::buffer_prologue_extention_type   ext;
+    noise_context_type::buffer_key_type     remote_public_key;
+    noise::buffer_pre_shared_key_type       pre_shared_key;
+    const noise_context_type::keypair_type &local_keypair;
 
     typename noise::buffer_handshake_packet_type buffer_handshake_message{};
     std::size_t                                  offset_noise_handshake_unit;
@@ -83,27 +81,18 @@ private:
 
 } // namespace essu
 essu::noise_handshake_context::noise_handshake_context(noise_handshake_context &&other)
-    : noise_handshake_context(other.role, other.ext, other.local_keypair,
-                              other.remote_public_key, other.pre_shared_key) {
+    : noise_handshake_context(other.role, other.ext, other.remote_public_key,
+                              other.pre_shared_key, other.local_keypair) {
 }
 essu::noise_handshake_context::noise_handshake_context(
     noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
-    const noise_context_type::keypair_type    &_local_keypair,
     const noise_context_type::buffer_key_type &_remote_public_key,
-    const noise::buffer_pre_shared_key_type   &_pre_shared_key)
-    : role(_role), ext(_ext), local_keypair(_local_keypair),
-      remote_public_key(_remote_public_key), pre_shared_key(_pre_shared_key) {
+    const noise::buffer_pre_shared_key_type   &_pre_shared_key,
+    const noise_context_type::keypair_type    &_local_keypair)
+    : role(_role), ext(_ext), remote_public_key(_remote_public_key),
+      pre_shared_key(_pre_shared_key), local_keypair(_local_keypair) {
 }
-essu::noise_handshake_context &
-    essu::noise_handshake_context::operator=(noise_handshake_context &&other) {
-    role              = other.role;
-    ext               = other.ext;
-    pre_shared_key    = other.pre_shared_key;
-    local_keypair     = other.local_keypair;
-    remote_public_key = other.remote_public_key;
 
-    return *this;
-}
 void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     check_noise_action(noise::noise_action::WRITE_MESSAGE);
 
@@ -162,11 +151,12 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
         return;
     }
 
-    std::size_t random_bytes_size =
-        (offset_noise_handshake_unit - noise_ctx.get_handshake_buffer().get().size);
+    std::size_t occupied_bytes =
+        (noise_ctx.get_handshake_buffer().get().size
+         - (offset_noise_handshake_unit - payload_unit.buffer.size()));
     random_state.padding_buffer.set(
-        {payload_unit.buffer.data(), payload_unit.buffer.size() - random_bytes_size},
-        random_bytes_size);
+        {payload_unit.buffer.data(), payload_unit.buffer.size()}, occupied_bytes);
+    random_state.pad();
 
     buffer_handshake_message    = {};
     offset_noise_handshake_unit = 0;
@@ -301,6 +291,8 @@ void essu::noise_handshake_context::stop() {
     generate_posthandshake_unique_values();
 
     noise_ctx.dump();
+
+    status = status_enum(static_cast<std::size_t>(status) + 1);
 }
 
 void essu::noise_handshake_context::check_noise_action(noise::noise_action expected) {

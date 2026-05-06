@@ -74,7 +74,7 @@ struct extention_payload_data_type {
 };
 struct noise_handshake_context;
 struct session_info_type;
-struct protocol_type;
+struct protocol;
 using packet_type = network::packet_native_type<extention_payload_data_type>;
 
 } // namespace essu
