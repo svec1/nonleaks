@@ -10,6 +10,13 @@ namespace essu {
 struct session_info_type {
     friend struct protocol;
 
+    enum class status_enum : std::size_t {
+        START = 0,
+        EXCHANGE,
+        STOP,
+        COMPLETE,
+    };
+
 public:
     session_info_type(network::buffer_address_type _addr, noise::noise_role _role,
                       noise::buffer_prologue_extention_type      _ext,
@@ -25,6 +32,7 @@ public:
 
 private:
     void reset_state() {
+        status                        = status_enum::START;
         batches_sent_number           = 0;
         batches_received_number       = 0;
         sender_units_number           = 0;
@@ -43,6 +51,7 @@ private:
     noise_handshake_context handshake_context;
     std::uint64_t           handshake_number = 0;
 
+    status_enum   status;
     std::uint64_t batches_sent_number;
     std::uint64_t batches_received_number;
     std::uint64_t sender_units_number;
@@ -63,10 +72,10 @@ public:
 
     static void start_handshake(session_info_type &session_info);
     static void stop_handshake(session_info_type &session_info);
+    static void update_status(session_info_type &session_info);
 
-    static noise::noise_role get_role(const session_info_type &session_info);
-    static noise::noise_action
-                         get_handshake_action(const session_info_type &session_info);
+    static session_info_type::status_enum
+                         get_session_status(const session_info_type &session_info);
     static std::uint64_t get_handshake_number(const session_info_type &session_info);
     static std::uint64_t get_handshake_id(const session_info_type &session_info);
     static bool          can_send_packet(const session_info_type &session_info);
@@ -104,7 +113,7 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
     if (handshake_already_complete && !can_send_packet(session_info))
         log.throw_exception("Expected to rehandshake.");
 
-    if (get_handshake_action(session_info) == noise::noise_action::WRITE_MESSAGE)
+    if (session_info.handshake_context.get_action() == noise::noise_action::WRITE_MESSAGE)
         session_info.handshake_context.init_packet(pckt);
     if (session_info.was_received_retry
         || session_info.batches_sent_number == max_available_batch_number) {
@@ -278,9 +287,23 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
 
     if (pckt->units[2].header.type == unit_type::unit_type_enum::retry)
         session_info.was_received_retry = true;
-    if (get_handshake_action(session_info) == noise::noise_action::READ_MESSAGE)
+    if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE)
         session_info.handshake_context.process_packet(std::move(pckt));
-};
+}
+void essu::protocol::update_status(session_info_type &session_info) {
+    auto action = session_info.handshake_context.get_action();
+    if (action == noise::noise_action::NONE) {
+        if (session_info.handshake_context.is_complete()
+            && (!session_info.was_sent_retry || !session_info.was_received_retry))
+            session_info.status = session_info_type::status_enum::COMPLETE;
+        else
+            session_info.status = session_info_type::status_enum::START;
+    } else if (action == noise::noise_action::WRITE_MESSAGE
+               || action == noise::noise_action::READ_MESSAGE)
+        session_info.status = session_info_type::status_enum::EXCHANGE;
+    else if (action == noise::noise_action::SPLIT)
+        session_info.status = session_info_type::status_enum::STOP;
+}
 
 void essu::protocol::start_handshake(session_info_type &session_info) {
     session_info.reset_state();
@@ -290,12 +313,9 @@ void essu::protocol::stop_handshake(session_info_type &session_info) {
     session_info.handshake_context.stop();
     ++session_info.handshake_number;
 }
-noise::noise_role essu::protocol::get_role(const session_info_type &session_info) {
-    return session_info.handshake_context.get_role();
-}
-noise::noise_action
-    essu::protocol::get_handshake_action(const session_info_type &session_info) {
-    return session_info.handshake_context.get_action();
+essu::session_info_type::status_enum
+    essu::protocol::get_session_status(const session_info_type &session_info) {
+    return session_info.status;
 }
 std::uint64_t
     essu::protocol::get_handshake_number(const session_info_type &session_info) {
@@ -305,12 +325,14 @@ std::uint64_t essu::protocol::get_handshake_id(const session_info_type &session_
     return session_info.handshake_context.get_handshake_id();
 }
 bool essu::protocol::can_send_packet(const session_info_type &session_info) {
-    return get_handshake_action(session_info) == noise::noise_action::WRITE_MESSAGE
+    return session_info.handshake_context.get_action()
+               == noise::noise_action::WRITE_MESSAGE
            || (session_info.handshake_context.is_complete()
                && !session_info.was_sent_retry);
 }
 bool essu::protocol::can_receive_packet(const session_info_type &session_info) {
-    return get_handshake_action(session_info) == noise::noise_action::READ_MESSAGE
+    return session_info.handshake_context.get_action()
+               == noise::noise_action::READ_MESSAGE
            || (session_info.handshake_context.is_complete()
                && !session_info.was_received_retry);
 }

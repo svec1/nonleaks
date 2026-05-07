@@ -166,6 +166,7 @@ public:
     decltype(auto) get_running() const { return running; }
 
     void close() {
+        socket.cancel();
         socket.close();
         running.store(false);
     }
@@ -219,7 +220,7 @@ udp_stream<Action, v>::~udp_stream() {
 template<Derived_from_action Action, ipv v>
 void udp_stream<Action, v>::register_async_send() {
     // TODO: supporting pseudo proxy such as obfs4 or webtunnel
-    if (!running.load())
+    if (!running.load() || !act.get_running())
         return;
 
     asio::post(socket.get_executor(), [this] {
@@ -250,7 +251,7 @@ void udp_stream<Action, v>::register_async_send() {
 }
 template<Derived_from_action Action, ipv v>
 void udp_stream<Action, v>::register_async_receive() {
-    if (!running.load())
+    if (!running.load() || !act.get_running())
         return;
 
     // Waits for a new packet
