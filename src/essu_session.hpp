@@ -128,6 +128,7 @@ void essu::session_handler::init_packet(packet_type &pckt) {
         if (session_status == session_info_type::status_enum::COMPLETE) {
             for (std::size_t i = 0; i < pckt->units.size(); ++i)
                 pckt->units[i].header.type = decltype(pckt->units[0].header.type)::dummy;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
 
         protocol::prepare(pckt, session_info);

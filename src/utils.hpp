@@ -496,6 +496,12 @@ public:
 public:
     class iterator {
     public:
+        using value_type      = T;
+        using difference_type = std::ptrdiff_t;
+        using pointer         = T *;
+        using reference       = T &;
+
+    public:
         explicit iterator(monotonic_placement_new_array<T, _buffer_size> &_array,
                           std::size_t                                     _it)
             : array(_array), it(_it) {}
@@ -511,6 +517,7 @@ public:
         decltype(auto) operator==(iterator other) const { return it == other.it; }
         decltype(auto) operator!=(iterator other) const { return !(*this == other); }
         decltype(auto) operator*() const { return array.get().at(it); }
+        decltype(auto) operator->() const { return &array.get().at(it); }
 
     private:
         std::reference_wrapper<monotonic_placement_new_array<T, _buffer_size>> array;

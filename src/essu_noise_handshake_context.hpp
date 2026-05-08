@@ -6,7 +6,8 @@ namespace essu {
 struct noise_handshake_context {
 private:
     using buffer_unique_value_type =
-        noise::buffer_type<noise_context_type::nonce_size * 2 + sizeof(std::uint64_t)>;
+        noise::buffer_type<noise_context_type::nonce_size * 2 + sizeof(std::uint64_t)
+                           + sizeof(std::uint16_t)>;
 
     enum class status_enum : std::size_t {
         HS1 = 0,
@@ -31,6 +32,7 @@ public:
     bool                                       is_complete() const;
     noise::noise_action                        get_action() const;
     noise::noise_role                          get_role() const;
+    std::uint16_t                              get_available_batch_number() const;
     std::uint64_t                              get_handshake_id() const;
     const noise_context_type::buffer_key_type &get_remote_public_key() const;
     typename noise_context_type::cipher_state &get_payload_cipher_state();
@@ -76,6 +78,7 @@ private:
     typename noise_context_type::hash_state::buffer_type handshake_hash{};
     buffer_unique_value_type                             unique_value{};
     buffer_unique_value_type                             unique_value_previous{};
+    std::uint16_t                                        available_batch_number;
     std::uint64_t                                        handshake_id;
 };
 
@@ -239,6 +242,9 @@ noise::noise_action essu::noise_handshake_context::get_action() const {
 noise::noise_role essu::noise_handshake_context::get_role() const {
     return role;
 }
+std::uint16_t essu::noise_handshake_context::get_available_batch_number() const {
+    return available_batch_number;
+}
 std::uint64_t essu::noise_handshake_context::get_handshake_id() const {
     return handshake_id;
 }
@@ -392,17 +398,23 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
                     {unique_value_two.data(), unique_value_two.size()});
     // Handles the first unique_value
     {
+        available_batch_number = std::clamp<std::uint16_t>(
+            noheap::represent_bytes<std::uint16_t>(
+                noheap::clip_buffer<sizeof(std::uint16_t), 0>(unique_value)),
+            min_available_batch_number, max_available_batch_number);
         handshake_id = noheap::represent_bytes<std::uint64_t>(
-            noheap::clip_buffer<sizeof(std::uint64_t), 0>(unique_value));
+            noheap::clip_buffer<sizeof(std::uint64_t), sizeof(std::uint16_t)>(
+                unique_value));
 
         noise_context_type::buffer_nonce_type value1 =
             noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
                 noheap::clip_buffer<noise_context_type::nonce_size,
-                                    sizeof(std::uint64_t)>(unique_value));
+                                    sizeof(std::uint16_t) + sizeof(std::uint64_t)>(
+                    unique_value));
         noise_context_type::buffer_nonce_type value2 =
             noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
                 noheap::clip_buffer<noise_context_type::nonce_size,
-                                    sizeof(std::uint64_t)
+                                    sizeof(std::uint16_t) + sizeof(std::uint64_t)
                                         + noise_context_type::nonce_size>(unique_value));
 
         // Maximum initial value of nonce(counter block) is 2^48−1
