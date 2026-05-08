@@ -4,9 +4,11 @@
 
 using namespace boost;
 using dba = stream_audio::default_base_audio;
+using re  = noheap::runtime_error;
 
 constexpr log_handler log_main{{}};
 constexpr auto        name_config_file = "xxcore.json";
+constexpr auto usage_string = "Usage: xxcore [-d sound device] [-i ip host] [-p port]";
 
 struct xxcore_config {
     std::string_view             device;
@@ -18,15 +20,10 @@ struct xxcore_config {
 // Parses cmd options
 static void parse_options(xxcore_config &cfg, int argc, char *argv[]) {
     static constexpr auto throw_usage = [](auto arg, int expected_argument = 0) {
-        using re = noheap::runtime_error;
-
         re::buffer_type buffer;
         auto            end_it = buffer.begin();
 
-        end_it = std::format_to_n(end_it, re::buffer_size,
-                                  "Usage: xxcore [-d sound device] [-h "
-                                  "IP Host] [-p port]\n")
-                     .out;
+        end_it = std::format_to_n(end_it, re::buffer_size, "{}\n", usage_string).out;
         if (expected_argument == 1)
             end_it = std::format_to_n(end_it, re::buffer_size,
                                       "Option requires an argument: {}", arg)
@@ -64,12 +61,15 @@ static void parse_options(xxcore_config &cfg, int argc, char *argv[]) {
 
         try {
             switch (option[1]) {
+                case 'h': {
+                    throw re(usage_string);
+                }
                 case 'd': {
                     current_value = get_argument(argc, argv, i);
                     cfg.device    = current_value;
                     break;
                 }
-                case 'h': {
+                case 'i': {
                     current_value = get_argument(argc, argv, i);
                     cfg.addr      = asio::ip::make_address_v4(current_value);
                     break;

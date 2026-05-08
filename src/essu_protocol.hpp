@@ -105,17 +105,18 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         session_info.handshake_context.get_header_cipher_state_sender();
     decltype(auto) random_state = session_info.handshake_context.get_random_state();
 
-    bool handshake_already_complete = session_info.handshake_context.is_complete();
+    bool session_handshake_complete = session_info.handshake_context.is_complete();
 
     check_sesssion_state(session_info);
-    if (handshake_already_complete && !can_send_packet(session_info))
+    if (session_handshake_complete && !can_send_packet(session_info))
         log.throw_exception("Expected to rehandshake.");
 
     if (session_info.handshake_context.get_action() == noise::noise_action::WRITE_MESSAGE)
         session_info.handshake_context.init_packet(pckt);
 
     // If available batch number is reached
-    if (session_info.handshake_context.is_complete()
+    if (session_info.handshake_context.get_role() == noise::noise_role::INITIATOR
+        && session_handshake_complete
         && session_info.batches_sent_number
                == session_info.handshake_context.get_available_batch_number())
         session_info.needs_rehandshake = true;
@@ -165,7 +166,7 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         }
 
         // Encrypts buffer data and authenticates based on the header
-        if (handshake_already_complete) {
+        if (session_handshake_complete) {
             payload_cipher_state.encrypt_buffer.set(
                 {unit.buffer.data(), unit.buffer.size()}, unit.buffer_size_without_mac());
             payload_cipher_state.encrypt(
@@ -200,10 +201,10 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
         session_info.handshake_context.get_payload_cipher_state();
     decltype(auto) header_cipher_state =
         session_info.handshake_context.get_header_cipher_state_receiver();
-    bool handshake_already_complete = session_info.handshake_context.is_complete();
+    bool session_handshake_complete = session_info.handshake_context.is_complete();
 
     check_sesssion_state(session_info);
-    if (handshake_already_complete && !can_receive_packet(session_info))
+    if (session_handshake_complete && !can_receive_packet(session_info))
         log.throw_exception("Expected to rehandshake.");
 
     // Selects possible unit number
@@ -236,7 +237,7 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
                 payload_cipher_state.rekey_decrypt();
 
             // Tries to decrypt buffer data
-            if (handshake_already_complete) {
+            if (session_handshake_complete) {
                 payload_cipher_state.decrypt_buffer.set(
                     {test_unit.buffer.data(), test_unit.buffer.size()},
                     test_unit.buffer.size());
@@ -268,7 +269,7 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
 
         // If performs handshake or was failed to decrypt
         // max_undecrypted_batches_number count packets after handshake
-        if (!handshake_already_complete
+        if (!session_handshake_complete
             || session_info.undecrypted_batch_number == max_undecrypted_batch_number)
             log.throw_exception("Failed to decrypt last batches.");
         return;
@@ -281,17 +282,18 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
                   return el_left.header.number < el_right.header.number;
               });
 
+    ++session_info.receiver_units_number;
+    ++session_info.batches_received_number;
+
     // If available batch number is reached
-    if (session_info.handshake_context.is_complete()
-        && session_info.batches_received_number
+    if (session_info.handshake_context.get_role() == noise::noise_role::RESPONDER
+        && session_handshake_complete
+        && session_info.batches_received_number - 1
                == session_info.handshake_context.get_available_batch_number())
         session_info.needs_rehandshake = true;
 
     if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE)
         session_info.handshake_context.process_packet(std::move(pckt));
-
-    ++session_info.receiver_units_number;
-    ++session_info.batches_received_number;
 }
 void essu::protocol::update_status(session_info_type &session_info) {
     auto action = session_info.handshake_context.get_action();
@@ -315,6 +317,8 @@ void essu::protocol::start_handshake(session_info_type &session_info) {
 void essu::protocol::stop_handshake(session_info_type &session_info) {
     session_info.handshake_context.stop();
     ++session_info.handshake_number;
+    log.to_all("Available batch number: {}",
+               session_info.handshake_context.get_available_batch_number());
 }
 essu::session_info_type::status_enum
     essu::protocol::get_session_status(const session_info_type &session_info) {
