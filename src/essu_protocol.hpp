@@ -115,8 +115,9 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         session_info.handshake_context.init_packet(pckt);
 
     // If available batch number is reached
-    if (session_info.batches_sent_number
-        == session_info.handshake_context.get_available_batch_number())
+    if (session_info.handshake_context.is_complete()
+        && session_info.batches_sent_number
+               == session_info.handshake_context.get_available_batch_number())
         session_info.needs_rehandshake = true;
 
     for (std::uint64_t i = 0; i < pckt->units.size(); ++i) {
@@ -281,8 +282,9 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
               });
 
     // If available batch number is reached
-    if (session_info.batches_received_number
-        == session_info.handshake_context.get_available_batch_number())
+    if (session_info.handshake_context.is_complete()
+        && session_info.batches_received_number
+               == session_info.handshake_context.get_available_batch_number())
         session_info.needs_rehandshake = true;
 
     if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE)
