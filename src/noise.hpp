@@ -210,12 +210,13 @@ public:
     static constexpr NoiseProtocolId             nid_static{
         .prefix_id  = NOISE_PREFIX_PSK,
         .pattern_id = static_cast<std::uint16_t>(config.pattern),
-        .dh_id      = static_cast<std::uint16_t>(config.ecdh),
-        .cipher_id  = static_cast<std::uint16_t>(config.cipher),
-        .hash_id    = static_cast<std::uint16_t>(config.hash),
-        .hybrid_id  = (config.ecdh == ecdh_type::X25519_KYBER1024) ? NOISE_DH_KYBER1024
-                                                                   : NOISE_DH_NONE,
-        .reserved   = {},
+        .dh_id      = static_cast<std::uint16_t>(
+            ecdh_type(static_cast<std::uint16_t>(config.ecdh) ^ NOISE_DH_KYBER1024)),
+        .cipher_id = static_cast<std::uint16_t>(config.cipher),
+        .hash_id   = static_cast<std::uint16_t>(config.hash),
+        .hybrid_id = (config.ecdh == ecdh_type::X25519_KYBER1024) ? NOISE_DH_KYBER1024
+                                                                  : NOISE_DH_NONE,
+        .reserved  = {},
     };
 
 public:
