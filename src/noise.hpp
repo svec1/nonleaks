@@ -160,6 +160,9 @@ struct noise_context_config {
     static constexpr cipher_type   cipher  = _cipher;
     static constexpr hash_type     hash    = _hash;
 
+    static constexpr std::size_t mac_size   = get_mac_size<cipher>();
+    static constexpr std::size_t nonce_size = get_nonce_size<cipher>();
+
     static consteval std::size_t get_hs1_size() {
         if constexpr (pattern == noise_pattern::XX)
             return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
@@ -196,7 +199,6 @@ struct noise_context_config {
             static_assert(false, "Invalid noise context config.");
     }
 
-private:
     static_assert(noise::pattern_ecdh_is_compatible<pattern, ecdh>(),
                   "Noise pattern and ecdh type is not compatible.");
 };
@@ -205,26 +207,19 @@ template<noise::noise_context_config _config>
 class noise_context {
 public:
     static constexpr noise::noise_context_config config = _config;
-    static constexpr bool hybrid_kyber1024 = (config.ecdh == ecdh_type::X25519_KYBER1024);
-    static constexpr ecdh_type ecdh =
-        hybrid_kyber1024
-            ? ecdh_type(static_cast<std::uint16_t>(config.ecdh) ^ NOISE_DH_KYBER1024)
-            : config.ecdh;
-
-    static constexpr NoiseProtocolId nid_static{
+    static constexpr NoiseProtocolId             nid_static{
         .prefix_id  = NOISE_PREFIX_PSK,
         .pattern_id = static_cast<std::uint16_t>(config.pattern),
-        .dh_id      = static_cast<std::uint16_t>(ecdh),
+        .dh_id      = static_cast<std::uint16_t>(config.ecdh),
         .cipher_id  = static_cast<std::uint16_t>(config.cipher),
         .hash_id    = static_cast<std::uint16_t>(config.hash),
-        .hybrid_id  = hybrid_kyber1024 ? NOISE_DH_KYBER1024 : NOISE_DH_NONE,
+        .hybrid_id  = (config.ecdh == ecdh_type::X25519_KYBER1024) ? NOISE_DH_KYBER1024
+                                                                   : NOISE_DH_NONE,
         .reserved   = {},
     };
 
 public:
-    static constexpr std::size_t mac_size   = get_mac_size<config.cipher>();
-    static constexpr std::size_t nonce_size = get_nonce_size<config.cipher>();
-    using buffer_key_type                   = buffer_type<get_dh_key_size<ecdh>()>;
+    using buffer_key_type   = buffer_type<get_dh_key_size<config.ecdh>()>;
     using buffer_nonce_type = buffer_type<get_nonce_size<config.cipher>()>;
 
 private:
@@ -656,6 +651,7 @@ template<noise::noise_context_config _config>
 void noise::noise_context<_config>::init(noise_role role) {
     std::size_t ret;
     cipher_st.dump();
+
     if ((ret = noise_handshakestate_new_by_id(&handshakestate, &nid_static,
                                               static_cast<std::uint16_t>(role)))
         != NOISE_ERROR_NONE)

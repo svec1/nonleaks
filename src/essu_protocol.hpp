@@ -363,11 +363,10 @@ void essu::protocol::check_protocol_compliance(
 noise::buffer_type<essu::header_data_size> essu::protocol::derive_header_obfs_key(
     typename noise_context_type::cipher_state &header_cipher_state) {
     noise::buffer_type<sizeof(typename essu::unit_type::header_data_type)
-                       + noise_context_type::mac_size>
+                       + noise_config.mac_size>
         obfs_key_tmp{};
     header_cipher_state.encrypt_buffer.set({obfs_key_tmp.data(), obfs_key_tmp.size()},
-                                           obfs_key_tmp.size()
-                                               - noise_context_type::mac_size);
+                                           obfs_key_tmp.size() - noise_config.mac_size);
     header_cipher_state.encrypt({});
 
     return noheap::to_buffer<decltype(derive_header_obfs_key(header_cipher_state))>(

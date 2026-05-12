@@ -6,7 +6,7 @@ namespace essu {
 struct noise_handshake_context {
 private:
     using buffer_unique_value_type =
-        noise::buffer_type<noise_context_type::nonce_size * 2 + sizeof(std::uint64_t)
+        noise::buffer_type<noise_config.nonce_size * 2 + sizeof(std::uint64_t)
                            + sizeof(std::uint16_t)>;
 
     enum class status_enum : std::size_t {
@@ -149,8 +149,7 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
 
     // If fragmentation
     if (offset_noise_handshake_unit < noise_ctx.get_handshake_buffer().get().size) {
-        payload_unit.header.flag = decltype(payload_unit.header.flag)::wait_next;
-        fragmentation            = true;
+        fragmentation = true;
         return;
     }
 
@@ -192,8 +191,7 @@ void essu::noise_handshake_context::process_packet(packet_type &&pckt) {
     offset_noise_handshake_unit += payload_unit.buffer.size();
 
     // If fragmentation
-    if (payload_size >= payload_unit.buffer.size()
-        && payload_unit.header.flag == decltype(payload_unit.header.flag)::wait_next)
+    if (payload_size >= offset_noise_handshake_unit)
         return;
 
     if (status == status_enum::HS1)
@@ -352,12 +350,12 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
 
     // Generates keystream
     noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 3
-                       + noise_context_type::mac_size>
+                       + noise_config.mac_size>
                                      keystream{};
     noise_context_type::cipher_state cipher_tmp;
     cipher_tmp.set_encrypt_key(public_key_hash);
     cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
-                                  keystream.size() - noise_context_type::mac_size);
+                                  keystream.size() - noise_config.mac_size);
     cipher_tmp.encrypt({});
 
     auto header_obfs_key1 =
@@ -408,14 +406,16 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
 
         noise_context_type::buffer_nonce_type value1 =
             noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
-                noheap::clip_buffer<noise_context_type::nonce_size,
-                                    sizeof(std::uint16_t) + sizeof(std::uint64_t)>(
-                    unique_value));
+                noheap::clip_buffer<
+                    noheap::buffer_size<noise_context_type::buffer_nonce_type>,
+                    sizeof(std::uint16_t) + sizeof(std::uint64_t)>(unique_value));
         noise_context_type::buffer_nonce_type value2 =
             noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
-                noheap::clip_buffer<noise_context_type::nonce_size,
-                                    sizeof(std::uint16_t) + sizeof(std::uint64_t)
-                                        + noise_context_type::nonce_size>(unique_value));
+                noheap::clip_buffer<
+                    noheap::buffer_size<noise_context_type::buffer_nonce_type>,
+                    sizeof(std::uint16_t) + sizeof(std::uint64_t)
+                        + noheap::buffer_size<noise_context_type::buffer_nonce_type>>(
+                    unique_value));
 
         // Maximum initial value of nonce(counter block) is 2^48−1
         (*reinterpret_cast<std::uint64_t *>(value1.data())) >>= 16;
@@ -434,14 +434,14 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
     {
         // Generates keystream - the header obfuscation key
         noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 2
-                           + noise_context_type::mac_size>
+                           + noise_config.mac_size>
                                          keystream{};
         noise_context_type::cipher_state cipher_tmp;
         cipher_tmp.set_encrypt_key(
             noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
                                 0>(unique_value_two));
         cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
-                                      keystream.size() - noise_context_type::mac_size);
+                                      keystream.size() - noise_config.mac_size);
         cipher_tmp.encrypt({});
 
         auto header_obfs_key1 =

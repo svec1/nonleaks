@@ -16,7 +16,7 @@ constexpr std::size_t batch_window_number            = 64;
 constexpr std::size_t max_undecrypted_batch_number   = 16;
 constexpr std::size_t min_available_batch_number     = 1024;
 constexpr std::size_t max_available_batch_number     = std::uint16_t(-1);
-constexpr std::size_t max_available_handshake_number = 8192;
+constexpr std::size_t max_available_handshake_number = std::uint16_t(-1);
 constexpr std::size_t max_session_number             = 4;
 constexpr std::size_t unit_size                      = packet_size / batch_units_number;
 constexpr std::size_t buffer_data_size               = unit_size - header_data_size;
@@ -31,7 +31,7 @@ using noise_context_type = noise::noise_context<noise_config>;
 // Transport unit
 struct unit_type {
 public:
-    enum class unit_type_enum : noheap::ubyte {
+    enum class unit_type_enum : std::uint8_t {
         session_request = 0,
         session_created,
         session_confirmed,
@@ -41,27 +41,22 @@ public:
         dummy,
         retry,
     };
-    enum class flag_type_enum : noheap::ubyte {
-        none = 0,
-        wait_next,
-    };
 
     struct header_data_type {
         std::uint64_t  number;
         std::uint32_t  key_iteration_number;
         unit_type_enum type;
-        flag_type_enum flag;
         // Reserved
         std::uint8_t byte1;
         std::uint8_t byte2;
+        std::uint8_t byte3;
     };
 
 public:
     constexpr std::size_t buffer_size_without_mac() {
         return buffer_data_size - noise::get_mac_size<noise_config.cipher>();
     }
-    static_assert(sizeof(header_data_type) == header_data_size,
-                  "Header size is invalid.");
+    static_assert(sizeof(header_data_type) == header_data_size, "Invalid header size.");
 
 public:
     header_data_type header{};
