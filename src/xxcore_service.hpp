@@ -85,6 +85,8 @@ void xxcore_service::run() {
     {
         scope_guard session_stop([&] {
             io.stop();
+            for (auto &worker : workers)
+                worker.get();
             stream.close();
         });
 
@@ -97,9 +99,6 @@ void xxcore_service::run() {
         stream.register_async_receive();
         stream.get_action().run();
     }
-
-    for (auto &worker : workers)
-        worker.get();
 }
 
 void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_keypair) {

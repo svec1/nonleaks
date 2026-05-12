@@ -130,6 +130,9 @@ void print_cfg(const xxcore_config &cfg) {
     log_main.to_console("    | Rate: {} hz", dba::cfg.sample_rate);
     log_main.to_console("    | Sample size: {} bits", dba::cfg.bits_per_sample);
     log_main.to_console(" -- Network config: ");
+    log_main.to_console("    | Packet size: {}", essu::packet_size);
+    log_main.to_console("    | Unit size: {}", essu::unit_size);
+    log_main.to_console("    | Payload data size: {}", essu::payload_data_size);
     log_main.to_console("    | Max session number: {}", essu::max_session_number);
     log_main.to_console("    | Noise pattern: {}",
                         std::string_view(nc_type::get_name_id()));
