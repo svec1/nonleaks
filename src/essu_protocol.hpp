@@ -18,13 +18,17 @@ struct session_info_type {
     };
 
 public:
-    session_info_type(network::buffer_address_type _addr, noise::noise_role _role,
+    session_info_type(network::ipv _v, network::buffer_address_type _remote_address,
+                      std::uint16_t _remote_port, noise::noise_role _role,
                       noise::buffer_prologue_extention_type      _ext,
                       const noise_context_type::buffer_key_type &_remote_public_key,
                       const noise::buffer_pre_shared_key_type   &_pre_shared_key,
                       const noise_context_type::keypair_type    &_local_keypair)
-        : addr(_addr), handshake_context(_role, _ext, _remote_public_key, _pre_shared_key,
-                                         _local_keypair) {
+        : v(_v), remote_address(_remote_address),
+          string_remote_address(
+              network::utils::bytes_address_to_string(remote_address, v)),
+          remote_port(_remote_port), handshake_context(_role, _ext, _remote_public_key,
+                                                       _pre_shared_key, _local_keypair) {
         reset_state();
     }
     session_info_type(const session_info_type &) = delete;
@@ -45,7 +49,11 @@ private:
     }
 
 public:
-    const network::buffer_address_type addr;
+    const network::ipv                        v;
+    const network::buffer_address_type        remote_address;
+    const network::buffer_string_address_type string_remote_address;
+
+    std::uint16_t remote_port;
 
 private:
     noise_handshake_context handshake_context;
@@ -72,10 +80,14 @@ public:
 
     static void start_handshake(session_info_type &session_info);
     static void stop_handshake(session_info_type &session_info);
-    static void update_status(session_info_type &session_info);
+    static void init_handshake_packet(session_info_type &session_info, packet_type &pckt);
+    static void handle_handshake_packet(session_info_type &session_info,
+                                        packet_type      &&pckt);
+
+    static session_info_type::status_enum update_status(session_info_type &session_info);
 
     static session_info_type::status_enum
-                         get_session_status(const session_info_type &session_info);
+                         get_status(const session_info_type &session_info);
     static std::uint64_t get_handshake_number(const session_info_type &session_info);
     static std::uint64_t get_handshake_id(const session_info_type &session_info);
     static bool          can_send_packet(const session_info_type &session_info);
@@ -112,9 +124,6 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
     check_sesssion_state(session_info);
     if (session_handshake_complete && !can_send_packet(session_info))
         log.throw_exception("Expected to rehandshake.");
-
-    if (session_info.handshake_context.get_action() == noise::noise_action::WRITE_MESSAGE)
-        session_info.handshake_context.init_packet(pckt);
 
     // If available batch number is reached
     if (session_info.was_received_retry
@@ -293,11 +302,17 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
     if (session_handshake_complete
         && pckt->units[2].header.type == unit_type::unit_type_enum::retry)
         session_info.was_received_retry = true;
-
-    if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE)
-        session_info.handshake_context.process_packet(std::move(pckt));
 }
-void essu::protocol::update_status(session_info_type &session_info) {
+void essu::protocol::init_handshake_packet(session_info_type &session_info,
+                                           packet_type       &pckt) {
+    session_info.handshake_context.init_packet(pckt);
+}
+void essu::protocol::handle_handshake_packet(session_info_type &session_info,
+                                             packet_type      &&pckt) {
+    session_info.handshake_context.handle_packet(std::move(pckt));
+}
+essu::session_info_type::status_enum
+    essu::protocol::update_status(session_info_type &session_info) {
     auto action = session_info.handshake_context.get_action();
     if (action == noise::noise_action::NONE) {
         if (session_info.handshake_context.is_complete()
@@ -310,6 +325,8 @@ void essu::protocol::update_status(session_info_type &session_info) {
         session_info.status = session_info_type::status_enum::EXCHANGE;
     else if (action == noise::noise_action::SPLIT)
         session_info.status = session_info_type::status_enum::STOP;
+
+    return session_info.status;
 }
 
 void essu::protocol::start_handshake(session_info_type &session_info) {
@@ -319,11 +336,9 @@ void essu::protocol::start_handshake(session_info_type &session_info) {
 void essu::protocol::stop_handshake(session_info_type &session_info) {
     session_info.handshake_context.stop();
     ++session_info.handshake_number;
-    log.to_all("Available batch number: {}",
-               session_info.handshake_context.get_available_batch_number());
 }
 essu::session_info_type::status_enum
-    essu::protocol::get_session_status(const session_info_type &session_info) {
+    essu::protocol::get_status(const session_info_type &session_info) {
     return session_info.status;
 }
 std::uint64_t

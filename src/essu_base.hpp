@@ -7,6 +7,7 @@
 
 namespace essu {
 
+constexpr std::size_t timeout_ms                     = 7000;
 constexpr std::size_t packet_size                    = 1376;
 constexpr std::size_t header_data_size               = 16;
 constexpr std::size_t min_random_bytes_number        = 64;

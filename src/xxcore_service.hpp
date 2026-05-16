@@ -11,19 +11,35 @@
 using namespace boost;
 
 struct config_type {
-    noise::noise_role                         role;
-    essu::noise_context_type::keypair_type    keypair;
-    essu::noise_context_type::buffer_key_type rpubk;
-    essu::noise_context_type::buffer_key_type psk;
+    struct endpoint_meta_type {
+        noheap::buffer_chars_type<16> name;
+
+        network::ipv                              v;
+        network::buffer_address_type              address;
+        network::port_type                        port;
+        noise::noise_role                         role;
+        essu::noise_context_type::buffer_key_type rpubk;
+        essu::noise_context_type::buffer_key_type psk;
+    };
+
+    network::port_type                                                    listen_port;
+    bool                                                                  on_ipv6;
+    essu::noise_context_type::keypair_type                                keypair;
+    noheap::monotonic_array<endpoint_meta_type, essu::max_session_number> endpoint_meta_s;
 };
 
 struct json_config {
 private:
-    static constexpr std::string_view role_string  = "role";
-    static constexpr std::string_view privk_string = "privk";
-    static constexpr std::string_view pubk_string  = "pubk";
-    static constexpr std::string_view rpubk_string = "rpubk";
-    static constexpr std::string_view psk_string   = "psk";
+    static constexpr std::string_view listen_port_string = "listen_port";
+    static constexpr std::string_view on_ipv6_string     = "on_ipv6";
+    static constexpr std::string_view ipv6_string        = "ipv6";
+    static constexpr std::string_view address_string     = "address";
+    static constexpr std::string_view port_string        = "port";
+    static constexpr std::string_view role_string        = "role";
+    static constexpr std::string_view privk_string       = "privk";
+    static constexpr std::string_view pubk_string        = "pubk";
+    static constexpr std::string_view rpubk_string       = "rpubk";
+    static constexpr std::string_view psk_string         = "psk";
 
 public:
     static constexpr std::size_t max_size_config = BOOST_JSON_STACK_BUFFER_SIZE;
@@ -34,6 +50,10 @@ public:
     void get_buffer_config(buffer_config_type &buffer);
 
     config_type &get_config();
+
+private:
+    template<typename T>
+    T get_object_field(const json::object &value, const std::string_view field_string);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -48,12 +68,10 @@ class xxcore_service {
 public:
     static constexpr std::size_t workers_number = essu::max_session_number + 2;
 
-    using udp_stream   = network::udp_stream<essu::session_handler, network::ipv::v4>;
-    using address_type = udp_stream::address_type;
-    using port_type    = udp_stream::port_type;
+    using udp_stream = network::udp_stream<essu::session_handler>;
 
 public:
-    xxcore_service(config_type &config, address_type &&_addr, asio::ip::port_type _port);
+    xxcore_service(config_type &config);
 
     void run();
 
@@ -64,14 +82,10 @@ private:
 
 private:
     config_type     &config;
-    address_type     addr;
     asio::io_context io;
-    udp_stream       stream;
 };
 
-xxcore_service::xxcore_service(config_type &_config, address_type &&_addr,
-                               asio::ip::port_type _port)
-    : config(_config), addr(std::move(_addr)), stream(io, _port) {
+xxcore_service::xxcore_service(config_type &_config) : config(_config) {
 }
 
 void xxcore_service::run() {
@@ -83,22 +97,25 @@ void xxcore_service::run() {
         worker = typename std::decay_t<decltype(worker)>{[this] { this->io.run(); }};
 
     {
+        udp_stream  stream(io, config.listen_port);
         scope_guard session_stop([&] {
             io.stop();
-            for (auto &worker : workers)
-                worker.get();
             stream.close();
         });
 
         // Tests
-        stream.get_action().register_session(stream.get_address_bytes(addr), config.role,
-                                             {}, config.keypair, config.rpubk,
-                                             config.psk);
+        for (const auto &endpoint_meta : config.endpoint_meta_s)
+            stream.get_action().register_session(endpoint_meta.v, endpoint_meta.address,
+                                                 endpoint_meta.port, endpoint_meta.role,
+                                                 {}, config.keypair, endpoint_meta.rpubk,
+                                                 endpoint_meta.psk);
 
-        stream.register_async_send();
-        stream.register_async_receive();
+        stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
         stream.get_action().run();
     }
+
+    for (auto &worker : workers)
+        worker.get();
 }
 
 void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_keypair) {
@@ -107,52 +124,76 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
 
     json::static_resource json_mr(json_buffer_tmp.data(), json_buffer_tmp.size());
 
-    json::value data          = json::parse(buffer.data(), &json_mr);
-    auto        global_object = data.as_object();
+    json::value    data          = json::parse(buffer.data(), &json_mr);
+    decltype(auto) global_object = data.as_object();
 
-    auto get_bytes_key = [&](const std::string_view field_name, auto &buffer_key,
-                             bool hex_encoding = true) {
-        if (!global_object.contains(field_name))
-            return;
-
-        auto field_key = global_object.at(field_name);
-        if (!field_key.is_string())
-            throw noheap::runtime_error(buffer_owner, "Field of key must be a string.");
-
-        auto string_key = field_key.as_string();
+    const auto get_bytes_key = [this](const json::object    &object,
+                                      const std::string_view field_name, auto &buffer_key,
+                                      bool hex_encoding = true) {
+        auto string_key = this->get_object_field<std::string_view>(object, field_name);
         if (string_key.size() >= buffer_key.size() && !hex_encoding)
-            throw noheap::runtime_error(
-                buffer_owner, "The specified key field has a large size: {}", field_name);
+            throw noheap::runtime_error(buffer_owner,
+                                        "The key[{}] field has a large size", field_name);
 
         if (hex_encoding) {
             decltype(noheap::hex_encode(buffer_key)) buffer_key_hex{};
-            std::copy(reinterpret_cast<noheap::rbyte *>(string_key.begin()),
-                      reinterpret_cast<noheap::rbyte *>(string_key.end()),
+            std::copy(reinterpret_cast<const noheap::rbyte *>(string_key.begin()),
+                      reinterpret_cast<const noheap::rbyte *>(string_key.end()),
                       reinterpret_cast<noheap::rbyte *>(buffer_key_hex.begin()));
             buffer_key = noheap::to_buffer<decltype(buffer_key)>(
                 noheap::hex_decode(buffer_key_hex));
         } else
-            std::copy(reinterpret_cast<noheap::rbyte *>(string_key.begin()),
-                      reinterpret_cast<noheap::rbyte *>(string_key.end()),
+            std::copy(reinterpret_cast<const noheap::rbyte *>(string_key.begin()),
+                      reinterpret_cast<const noheap::rbyte *>(string_key.end()),
                       reinterpret_cast<noheap::rbyte *>(buffer_key.begin()));
     };
 
-    if (!global_object.contains(role_string))
-        throw noheap::runtime_error(buffer_owner, "Field of role not specified.");
-
-    auto field_role = global_object.at(role_string);
-    if (!field_role.is_string())
-        throw noheap::runtime_error(buffer_owner, "Field of role must be string.");
-    config.role = noise::get_noise_role(field_role.as_string());
-
+    config.listen_port =
+        get_object_field<std::uint16_t>(global_object, listen_port_string);
+    config.on_ipv6 = get_object_field<bool>(global_object, on_ipv6_string);
     if (new_keypair) {
         config.keypair = essu::noise_context_type::generate_keypair();
     } else {
-        get_bytes_key(privk_string, config.keypair.priv);
-        get_bytes_key(pubk_string, config.keypair.pub);
+        get_bytes_key(global_object, privk_string, config.keypair.priv);
+        get_bytes_key(global_object, pubk_string, config.keypair.pub);
     }
-    get_bytes_key(rpubk_string, config.rpubk);
-    get_bytes_key(psk_string, config.psk, false);
+
+    for (const auto &global_field : global_object) {
+        decltype(auto) global_field_key   = global_field.key();
+        decltype(auto) global_field_value = global_field.value();
+
+        if (!global_field_value.is_object())
+            continue;
+
+        if (std::find_if(config.endpoint_meta_s.begin(), config.endpoint_meta_s.end(),
+                         [global_field_key](const auto &el) {
+                             return !std::strcmp(el.name.data(), global_field_key.data());
+                         })
+            != config.endpoint_meta_s.end())
+            throw noheap::runtime_error(buffer_owner, "Endpoint[{}] is already exist.",
+                                        global_field_key);
+
+        config_type::endpoint_meta_type endpoint_meta{};
+        decltype(auto)                  object = global_field_value.as_object();
+
+        std::copy(global_field_key.begin(),
+                  global_field_key.begin()
+                      + std::clamp<std::size_t>(global_field_key.size(), 0,
+                                                endpoint_meta.name.size()),
+                  endpoint_meta.name.begin());
+        endpoint_meta.v = get_object_field<bool>(object, ipv6_string) ? network::ipv::v6
+                                                                      : network::ipv::v4;
+        endpoint_meta.address = network::utils::string_address_to_bytes(
+            get_object_field<std::string_view>(object, address_string), endpoint_meta.v);
+        endpoint_meta.port = get_object_field<network::port_type>(object, port_string);
+        endpoint_meta.role = noise::get_noise_role(
+            get_object_field<std::string_view>(object, role_string));
+
+        get_bytes_key(object, rpubk_string, endpoint_meta.rpubk);
+        get_bytes_key(object, psk_string, endpoint_meta.psk, false);
+
+        config.endpoint_meta_s.push_back(endpoint_meta);
+    }
 }
 void json_config::get_buffer_config(buffer_config_type &buffer) {
     noheap::buffer_bytes_type<BOOST_JSON_STACK_BUFFER_SIZE, noheap::ubyte>
@@ -162,18 +203,40 @@ void json_config::get_buffer_config(buffer_config_type &buffer) {
     json::serializer      sz(&json_mr);
     buffer = {};
 
-    json::value data = {
-        {role_string, noise::get_noise_role_string(config.role)},
-        {privk_string, std::string_view(noheap::hex_encode(config.keypair.priv))},
-        {pubk_string, std::string_view(noheap::hex_encode(config.keypair.pub))},
-        {rpubk_string, config.rpubk != std::decay_t<decltype(config.rpubk)>{}
-                           ? std::string_view(noheap::hex_encode(config.rpubk))
-                           : ""},
-        {psk_string,
-         std::string_view(noheap::to_buffer<noheap::buffer_chars_type<
-                              noheap::buffer_size<decltype(config.psk)>>>(config.psk)
-                              .data(),
-                          std::strlen(reinterpret_cast<char *>(config.psk.data())))}};
+    json::value  data;
+    json::object global_object;
+
+    global_object.emplace(listen_port_string, config.listen_port);
+    global_object.emplace(on_ipv6_string, config.on_ipv6);
+    global_object.emplace(privk_string,
+                          std::string_view(noheap::hex_encode(config.keypair.priv)));
+    global_object.emplace(pubk_string,
+                          std::string_view(noheap::hex_encode(config.keypair.pub)));
+
+    for (const auto &endpoint_meta : config.endpoint_meta_s) {
+        global_object.emplace(
+            std::string_view(endpoint_meta.name.data()),
+            json::object{
+                {ipv6_string, endpoint_meta.v == network::ipv::v6},
+                {address_string,
+                 std::string_view(network::utils::bytes_address_to_string(
+                                      endpoint_meta.address, endpoint_meta.v)
+                                      .data())},
+                {port_string, endpoint_meta.port},
+                {role_string, noise::get_noise_role_string(endpoint_meta.role)},
+
+                {rpubk_string,
+                 endpoint_meta.rpubk != std::decay_t<decltype(endpoint_meta.rpubk)>{}
+                     ? std::string_view(noheap::hex_encode(endpoint_meta.rpubk))
+                     : ""},
+                {psk_string,
+                 std::string_view(noheap::to_buffer<const noheap::buffer_chars_type<
+                                      noheap::buffer_size<decltype(endpoint_meta.psk)>>>(
+                                      endpoint_meta.psk)
+                                      .data())}});
+    }
+
+    data.emplace_object() = global_object;
 
     sz.reset(&data);
     sz.read(buffer.data(), buffer.size());
@@ -181,4 +244,30 @@ void json_config::get_buffer_config(buffer_config_type &buffer) {
 config_type &json_config::get_config() {
     return config;
 }
+template<typename T>
+T json_config::get_object_field(const json::object    &object,
+                                const std::string_view field_string) {
+    if (!object.contains(field_string))
+        throw noheap::runtime_error(buffer_owner, "Field[{}] does not existed.",
+                                    field_string);
+    decltype(auto) field = object.at(field_string);
+    if constexpr (std::same_as<T, bool>) {
+        if (!field.is_bool())
+            throw noheap::runtime_error(buffer_owner, "Field[{}] must be bool.",
+                                        field_string);
+        return field.as_bool();
+    } else if constexpr (std::is_integral_v<T>) {
+        if (!field.is_int64())
+            throw noheap::runtime_error(buffer_owner, "Field[{}] must be number.",
+                                        field_string);
+        return field.as_int64();
+    } else if constexpr (std::same_as<T, std::string_view>) {
+        if (!field.is_string())
+            throw noheap::runtime_error(buffer_owner, "Field[{}] must be string.",
+                                        field_string);
+        return field.as_string();
+    } else
+        static_assert(false, "Invalid T type.");
+}
+
 #endif

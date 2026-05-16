@@ -11,10 +11,8 @@ constexpr auto        name_config_file = "xxcore.json";
 constexpr auto usage_string = "Usage: xxcore [-d sound device] [-i ip host] [-p port]";
 
 struct xxcore_config {
-    std::string_view             device;
-    asio::ip::port_type          port;
-    xxcore_service::address_type addr;
-    bool                         new_keypair = false;
+    std::string_view device;
+    bool             new_keypair = false;
 };
 
 // Parses cmd options
@@ -69,16 +67,6 @@ static void parse_options(xxcore_config &cfg, int argc, char *argv[]) {
                     cfg.device    = current_value;
                     break;
                 }
-                case 'i': {
-                    current_value = get_argument(argc, argv, i);
-                    cfg.addr      = asio::ip::make_address_v4(current_value);
-                    break;
-                }
-                case 'p': {
-                    current_value = get_argument(argc, argv, i);
-                    cfg.port      = std::stoi(current_value.data());
-                    break;
-                }
                 case 'k': {
                     cfg.new_keypair = true;
                     break;
@@ -121,8 +109,6 @@ void print_cfg(const xxcore_config &cfg) {
 
     log_main.to_console(" -- Sound architecture: {}", dba::arsnd_name);
     log_main.to_console(" -- Sound device: {}", cfg.device);
-    log_main.to_console(" -- Listening port: {}", cfg.port);
-    log_main.to_console(" -- Contact address: {}", cfg.addr.to_string());
     log_main.to_console(" -- Audio config: ");
     log_main.to_console("    | Bitrate: {} kbit/s", dba::cfg.bitrate / 1000);
     log_main.to_console("    | Latency: {} ms", dba::cfg.latency);
@@ -142,7 +128,7 @@ int main(int argc, char *argv[]) {
     json_config                     config;
     json_config::buffer_config_type buffer_config{};
     try {
-        xxcore_config cfg = {.device = dba::default_device_playback, .port = 8888};
+        xxcore_config cfg = {.device = dba::default_device_playback};
         parse_options(cfg, argc, argv);
         print_cfg(cfg);
 
@@ -156,7 +142,7 @@ int main(int argc, char *argv[]) {
                 config.get_buffer_config(buffer_config);
                 write_config(buffer_config);
             });
-            xxcore_service service(config.get_config(), std::move(cfg.addr), cfg.port);
+            xxcore_service service(config.get_config());
             service.run();
         }
 

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <boost/stacktrace.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -389,7 +390,7 @@ public:
         else if (it >= this->buffer.end())
             throw runtime_error("Invalid access.");
 
-        for (auto it_tmp = this->end(); it_tmp >= it; --it_tmp)
+        for (auto it_tmp = this->end() - 2; it_tmp >= it; --it_tmp)
             std::swap(*it_tmp, *(it_tmp + 1));
 
         *it = T{std::forward<Args>(args)...};
@@ -407,6 +408,12 @@ public:
         --count_pushed;
 
         return this->end() + 1;
+    }
+    T pop_back() {
+        if (count_pushed == 0)
+            throw runtime_error("Invalid access.");
+
+        return this->buffer[--count_pushed];
     }
     T pop_front() {
         if (count_pushed == 0)
@@ -509,13 +516,23 @@ public:
             ++it;
             return *this;
         }
+        decltype(auto) operator--() {
+            --it;
+            return *this;
+        }
         auto operator++(int) {
             iterator retval = *this;
             ++(*this);
             return retval;
         }
-        decltype(auto) operator==(iterator other) const { return it == other.it; }
-        decltype(auto) operator!=(iterator other) const { return !(*this == other); }
+        decltype(auto) operator+(std::size_t _it) const {
+            return iterator(array, it + _it);
+        }
+        decltype(auto) operator-(std::size_t _it) const {
+            return iterator(array, it - _it);
+        }
+        auto operator<=>(const iterator &other) const { return it <=> other.it; }
+        bool operator==(const iterator &other) const { return it == other.it; }
         decltype(auto) operator*() const { return array.get().at(it); }
         decltype(auto) operator->() const { return &array.get().at(it); }
 
@@ -528,10 +545,36 @@ public:
     iterator end() { return iterator(*this, this->size()); }
 
 public:
+    template<typename... Args>
+    void emplace(iterator it, Args &&...args) {
+        if (count_pushed == buffer_size())
+            throw runtime_error("Buffer overflow.");
+        if (size() && it >= end())
+            throw runtime_error("Invalid access.");
+
+        this->template malloc<rbyte *>(sizeof(T));
+
+        // Copies bytes to it+1
+        auto        data      = this->template data<noheap::ubyte *>();
+        auto        bytes_end = data + sizeof(T) * count_pushed;
+        auto        bytes_it  = data + sizeof(T) * std::distance(this->begin(), it);
+        std::size_t it_tmp    = count_pushed;
+        for (auto bytes_it_tmp = bytes_end - 1; bytes_it_tmp >= bytes_it;
+             --bytes_it_tmp) {
+            std::size_t distance_mod = std::distance(data, bytes_it_tmp) % sizeof(T);
+            if (distance_mod == 0)
+                --it_tmp;
+            std::swap(*bytes_it_tmp, *(data + distance_mod + sizeof(T) * it_tmp));
+        }
+
+        ++count_pushed;
+        ::new (reinterpret_cast<void *>(&(*it))) T(std::forward<Args>(args)...);
+    }
+
     template<typename _T>
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
-    void emplace_back(_T &&el) {
-        if (count_pushed == this->buffer_size())
+    void push_back(_T &&el) {
+        if (count_pushed == buffer_size())
             throw runtime_error("Buffer overflow.");
 
         decltype(auto) storage_p = this->template malloc<rbyte *>(sizeof(T));
@@ -540,27 +583,38 @@ public:
     }
     template<typename... Args>
     void emplace_back(Args &&...args) {
-        if (count_pushed == this->buffer_size())
-            throw runtime_error("Buffer overflow.");
-
-        decltype(auto) storage_p = this->template malloc<rbyte *>(sizeof(T));
-        ::new (reinterpret_cast<void *>(storage_p)) T(std::forward<Args>(args)...);
-        ++count_pushed;
+        emplace(size() ? end() - 1 : begin(), std::forward<Args>(args)...);
     }
-    void erase_back() {
-        if (count_pushed == 0)
+
+    void erase(iterator it) {
+        if (it == end())
             throw runtime_error("Invalid access.");
 
-        this->free_last();
+        it->~T();
+
+        // Copies bytes to it-1
+        auto        data      = this->template data<noheap::ubyte *>();
+        auto        bytes_end = data + sizeof(T) * count_pushed;
+        auto        bytes_it  = data + sizeof(T) * std::distance(this->begin(), it);
+        std::size_t it_tmp    = std::distance(this->begin(), it);
+        for (auto bytes_it_tmp = bytes_it; bytes_it_tmp < bytes_end; ++bytes_it_tmp) {
+            std::size_t distance_mod = std::distance(data, bytes_it_tmp) % sizeof(T);
+            if (distance_mod == 0)
+                ++it_tmp;
+            std::swap(*bytes_it_tmp, *(data + distance_mod + sizeof(T) * it_tmp));
+        }
+
+        this->free_last(sizeof(T));
         --count_pushed;
     }
 
     std::size_t size() const { return count_pushed; }
+    std::size_t buffer_size() const { return _buffer_size; }
 
 public:
     template<typename _T>
     decltype(auto) at(this _T &&_this, std::size_t it) {
-        if (it >= _this.count_pushed)
+        if (it >= _this.size())
             throw runtime_error("Invalid access.");
 
         return _this.operator[](it);
@@ -740,6 +794,17 @@ public:
                 return;
             this->log<async>(outstream, excp.get_owner(), "{}", excp.what());
         });
+    }
+
+    template<typename... Args>
+    void abort(std::format_string<Args...> format, Args &&...args) const {
+        this->to_all(format, std::forward<Args>(args)...);
+        std::abort();
+    }
+    void abort_invalid_state() const {
+        this->to_all("Invalid state.\n{}",
+                     boost::stacktrace::to_string(boost::stacktrace::stacktrace(1, 5)));
+        std::abort();
     }
 
 private:

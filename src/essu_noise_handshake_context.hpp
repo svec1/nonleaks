@@ -27,11 +27,10 @@ public:
 
 public:
     void init_packet(packet_type &pckt);
-    void process_packet(packet_type &&pckt);
+    void handle_packet(packet_type &&pckt);
 
     bool                                       is_complete() const;
     noise::noise_action                        get_action() const;
-    noise::noise_role                          get_role() const;
     std::uint16_t                              get_available_batch_number() const;
     std::uint64_t                              get_handshake_id() const;
     const noise_context_type::buffer_key_type &get_remote_public_key() const;
@@ -56,7 +55,7 @@ private:
 private:
     status_enum status;
 
-    noise_context_type                        noise_ctx;
+    noise_context_type                        noise_context;
     typename noise_context_type::cipher_state payload_cipher_state;
     typename noise_context_type::cipher_state header_cipher_state_sender;
     typename noise_context_type::cipher_state header_cipher_state_receiver;
@@ -112,14 +111,14 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
                 noheap::to_buffer<std::decay_t<decltype(handshake_payload)>>(
                     noheap::get_random_bytes<
                         noheap::buffer_size<decltype(handshake_payload)>>());
-            noise_ctx.get_handshake_payload_buffer().set(
+            noise_context.get_handshake_payload_buffer().set(
                 {handshake_payload.data(), handshake_payload.size()},
                 handshake_payload.size());
         }
 
-        noise_ctx.get_handshake_buffer().set(
+        noise_context.get_handshake_buffer().set(
             {buffer_handshake_message.data(), buffer_handshake_message.size()}, 0);
-        noise_ctx.set_handshake_message();
+        noise_context.set_handshake_message();
 
         // Adds ephemeral key obfuscation on ephemeral key
         if (status == status_enum::HS1) {
@@ -145,16 +144,16 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     else if (status == status_enum::HS3)
         payload_unit.header.type = unit_type::unit_type_enum::session_confirmed;
     else
-        this->log.throw_exception("Unexpected behaviour during the noise handshake.");
+        this->log.abort_invalid_state();
 
     // If fragmentation
-    if (offset_noise_handshake_unit < noise_ctx.get_handshake_buffer().get().size) {
+    if (offset_noise_handshake_unit < noise_context.get_handshake_buffer().get().size) {
         fragmentation = true;
         return;
     }
 
     std::size_t occupied_bytes =
-        (noise_ctx.get_handshake_buffer().get().size
+        (noise_context.get_handshake_buffer().get().size
          - (offset_noise_handshake_unit - payload_unit.buffer.size()));
     random_state.padding_buffer.set(
         {payload_unit.buffer.data(), payload_unit.buffer.size()}, occupied_bytes);
@@ -163,27 +162,31 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     buffer_handshake_message    = {};
     offset_noise_handshake_unit = 0;
     fragmentation               = false;
-
-    status = status_enum(static_cast<std::size_t>(status) + 1);
+    status                      = status_enum(static_cast<std::size_t>(status) + 1);
 }
-void essu::noise_handshake_context::process_packet(packet_type &&pckt) {
+void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
     check_noise_action(noise::noise_action::READ_MESSAGE);
 
     auto &payload_unit = pckt->units[0];
 
     // Determines size of payload data
-    std::uint64_t payload_size;
-    if (status == status_enum::HS1
-        && payload_unit.header.type == unit_type::unit_type_enum::session_request)
+    std::uint64_t payload_size = 0;
+    if (status == status_enum::HS1)
         payload_size = noise_config.get_hs1_size();
-    else if (status == status_enum::HS2
-             && payload_unit.header.type == unit_type::unit_type_enum::session_created)
+    else if (status == status_enum::HS2)
         payload_size = noise_config.get_hs2_size();
-    else if (status == status_enum::HS3
-             && payload_unit.header.type == unit_type::unit_type_enum::session_confirmed)
+    else if (status == status_enum::HS3)
         payload_size = noise_config.get_hs3_size();
     else
-        this->log.throw_exception("Unexpected behaviour during the noise handshake.");
+        this->log.abort_invalid_state();
+
+    if ((status == status_enum::HS1
+         && payload_unit.header.type != unit_type::unit_type_enum::session_request)
+        || (status == status_enum::HS2
+            && payload_unit.header.type != unit_type::unit_type_enum::session_created)
+        || (status == status_enum::HS3
+            && payload_unit.header.type != unit_type::unit_type_enum::session_confirmed))
+        this->log.throw_exception("Invalid type of handshake packet.");
 
     // Copies accepted unit to buffer of noise handshake message
     std::copy(payload_unit.buffer.begin(), payload_unit.buffer.end(),
@@ -202,13 +205,13 @@ void essu::noise_handshake_context::process_packet(packet_type &&pckt) {
                        std::bit_xor{});
     else if (status == status_enum::HS3)
         // Sets buffer to get random value
-        noise_ctx.get_handshake_payload_buffer().set(
+        noise_context.get_handshake_payload_buffer().set(
             {handshake_payload.data(), handshake_payload.size()}, 0);
 
     // Sets noise message
-    noise_ctx.get_handshake_buffer().set(
+    noise_context.get_handshake_buffer().set(
         {buffer_handshake_message.data(), offset_noise_handshake_unit}, payload_size);
-    noise_ctx.get_handshake_message();
+    noise_context.get_handshake_message();
 
     buffer_handshake_message    = {};
     offset_noise_handshake_unit = 0;
@@ -235,10 +238,8 @@ bool essu::noise_handshake_context::is_complete() const {
     return status == status_enum::COMPLETE;
 }
 noise::noise_action essu::noise_handshake_context::get_action() const {
-    return fragmentation ? noise::noise_action::WRITE_MESSAGE : noise_ctx.get_action();
-}
-noise::noise_role essu::noise_handshake_context::get_role() const {
-    return role;
+    return fragmentation ? noise::noise_action::WRITE_MESSAGE
+                         : noise_context.get_action();
 }
 std::uint16_t essu::noise_handshake_context::get_available_batch_number() const {
     return available_batch_number;
@@ -270,45 +271,43 @@ void essu::noise_handshake_context::start() {
 
     generate_pair_ephemeral_obfs_key();
 
-    noise_ctx.init(role);
-    noise_ctx.set_prologue(ext);
-    noise_ctx.set_local_keypair(local_keypair);
-    noise_ctx.set_remote_public_key(remote_public_key);
-    noise_ctx.set_pre_shared_key(pre_shared_key);
-    noise_ctx.start();
+    noise_context.init(role);
+    noise_context.set_prologue(ext);
+    noise_context.set_local_keypair(local_keypair);
+    noise_context.set_remote_public_key(remote_public_key);
+    noise_context.set_pre_shared_key(pre_shared_key);
+    noise_context.start();
 }
 void essu::noise_handshake_context::stop() {
     check_noise_action(noise::noise_action::SPLIT);
 
     // If local rpk is non empty it checks rpk from handshake, for XX pattern
-    if (auto handshake_remote_public_key = noise_ctx.get_remote_public_key();
+    if (auto handshake_remote_public_key = noise_context.get_remote_public_key();
         handshake_remote_public_key != remote_public_key) {
         if (remote_public_key == noise_context_type::buffer_key_type{})
             remote_public_key = handshake_remote_public_key;
         else
-            this->log.throw_exception("Remote public key from handshake is invalid.");
+            this->log.throw_exception("Invalid remote public key from handshake.");
     }
 
-    noise_ctx.stop();
-    noise_ctx.get_cipher_state(payload_cipher_state);
-    handshake_hash = noise_ctx.get_handshake_hash();
+    noise_context.stop();
+    noise_context.get_cipher_state(payload_cipher_state);
+    handshake_hash = noise_context.get_handshake_hash();
     generate_posthandshake_unique_values();
 
-    noise_ctx.dump();
+    noise_context.dump();
 
     status = status_enum(static_cast<std::size_t>(status) + 1);
 }
 
 void essu::noise_handshake_context::check_noise_action(noise::noise_action expected) {
-    auto action = noise_ctx.get_action();
+    auto action = noise_context.get_action();
 
     if (action == noise::noise_action::FAILED)
         this->log.throw_exception("Failed to handshake.");
 
     if (action == expected
-        || ((expected == noise::noise_action::WRITE_MESSAGE
-             || expected == noise::noise_action::READ_MESSAGE)
-            && fragmentation))
+        || (expected == noise::noise_action::WRITE_MESSAGE && fragmentation))
         return;
 
     if (action == noise::noise_action::WRITE_MESSAGE)
@@ -321,6 +320,8 @@ void essu::noise_handshake_context::check_noise_action(noise::noise_action expec
         this->log.throw_exception("Handshake already completed.");
     else if (action == noise::noise_action::NONE)
         this->log.throw_exception("Action is not required.");
+    else
+        this->log.abort_invalid_state();
 }
 
 // Generates ephemeral header obfuscation key + ephmeral obfuscation key for HS1
@@ -421,7 +422,7 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
         (*reinterpret_cast<std::uint64_t *>(value1.data())) >>= 16;
         (*reinterpret_cast<std::uint64_t *>(value2.data())) >>= 16;
 
-        if (get_role() == noise::noise_role::INITIATOR) {
+        if (noise_context.get_role() == noise::noise_role::INITIATOR) {
             payload_cipher_state.set_encrypt_nonce(value1);
             payload_cipher_state.set_decrypt_nonce(value2);
         } else {

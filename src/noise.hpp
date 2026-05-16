@@ -65,7 +65,7 @@ enum class hash_type : std::uint16_t {
     SHA3512 = NOISE_HASH_SHA3512,
 };
 
-noise_pattern get_noise_pattern(std::string_view pattern_string) {
+noise_pattern get_noise_pattern(const std::string_view pattern_string) {
     if (pattern_string == "XX")
         return noise_pattern::XX;
     else if (pattern_string == "XX_HFS")
@@ -77,7 +77,7 @@ noise_pattern get_noise_pattern(std::string_view pattern_string) {
     return noise_pattern::UNKNOWN;
 }
 
-noise_role get_noise_role(std::string_view role_string) {
+noise_role get_noise_role(const std::string_view role_string) {
     if (role_string == "INITIATOR")
         return noise_role::INITIATOR;
     else if (role_string == "RESPONDER")

@@ -28,8 +28,8 @@ set(CNOISE_TESTS OFF)
 add_subdirectory(${CNOISE_DIR})	
 
 add_executable(${XXCORE} ${SRC_FILES})
-target_compile_options(${XXCORE} PRIVATE -fsanitize=thread -Wall -Wextra -Wpedantic -pthread -O1)
-target_link_options(${XXCORE} PRIVATE  -fsanitize=thread)
+target_compile_options(${XXCORE} PRIVATE -Wall -Wextra -Wpedantic -pthread -O1)
+target_link_options(${XXCORE} PRIVATE -rdynamic)
 target_include_directories(
     ${XXCORE}
     PUBLIC 
@@ -42,7 +42,7 @@ target_link_libraries(
     ${XXCORE}
     PRIVATE
     Opus::opus
-    cnoise 
+    cnoise
 )
 
 if(NOT ${XXCORE_NONALLOWED_AUDIO})
