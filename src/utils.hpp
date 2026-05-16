@@ -133,22 +133,6 @@ constexpr TReturn represent_bytes(TSource &&buffer) {
     return *reinterpret_cast<std::decay_t<TReturn> *>(&buffer);
 }
 
-template<std::size_t count_bytes>
-buffer_bytes_type<count_bytes, ubyte> get_random_bytes() {
-    decltype(get_random_bytes<count_bytes>()) buffer_tmp;
-
-    std::random_device rd;
-    std::mt19937       gen(rd());
-
-    std::uniform_int_distribution<ubyte> distrib(std::numeric_limits<ubyte>::min(),
-                                                 std::numeric_limits<ubyte>::max());
-
-    for (auto &it : buffer_tmp)
-        it = distrib(rd);
-
-    return buffer_tmp;
-}
-
 class print_impl final {
 public:
     static constexpr std::size_t buffer_size = output_buffer_size;

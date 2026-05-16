@@ -107,10 +107,9 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     if (!fragmentation) {
         // Generates random value
         if (status == status_enum::HS3) {
-            handshake_payload =
-                noheap::to_buffer<std::decay_t<decltype(handshake_payload)>>(
-                    noheap::get_random_bytes<
-                        noheap::buffer_size<decltype(handshake_payload)>>());
+            random_state.padding_buffer.set(
+                {handshake_payload.data(), handshake_payload.size()}, 0);
+            random_state.pad();
             noise_context.get_handshake_payload_buffer().set(
                 {handshake_payload.data(), handshake_payload.size()},
                 handshake_payload.size());

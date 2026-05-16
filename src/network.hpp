@@ -410,9 +410,8 @@ buffer_address_type utils::string_address_to_bytes(std::string_view address, ipv
                 }
 
                 auto ip_block_string = address.substr(pos, pos_curr);
-                std::from_chars(ip_block_string.begin(), ip_block_string.end(),
-                                buffer_tmp[i++]);
-                pos = pos_curr + 1;
+                buffer_tmp[i++]      = std::stoll(ip_block_string.data(), nullptr);
+                pos                  = pos_curr + 1;
             }
             if (i != 4)
                 throw std::exception{};
