@@ -10,30 +10,56 @@ namespace essu {
 class session_handler : public network::action<packet_type> {
     static constexpr std::size_t buffer_packets_size = 128;
 
+    struct session_info_type_extended : session_info_type {
+        friend class session_handler;
+
+        session_info_type_extended(
+            const log_handler &_log_handler, network::ipv _v,
+            network::buffer_address_type _remote_address, std::uint16_t _remote_port,
+            noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
+            const noise_context_type::buffer_key_type &_remote_public_key,
+            const noise::buffer_pre_shared_key_type   &_pre_shared_key,
+            const noise_context_type::keypair_type    &_local_keypair)
+            : session_info_type(_v, _remote_address, _remote_port, _role, _ext,
+                                _remote_public_key, _pre_shared_key, _local_keypair),
+              _string_remote_address(
+                  network::utils::bytes_address_to_string(remote_address, v)),
+              log(_log_handler, string_remote_address) {}
+
+    private:
+        const network::buffer_string_address_type _string_remote_address;
+        const std::string_view string_remote_address{_string_remote_address};
+
+    public:
+        const log_proxy log;
+    };
+
     using session_s_type =
-        noheap::monotonic_placement_new_array<session_info_type, max_session_number>;
+        noheap::monotonic_placement_new_array<session_info_type_extended,
+                                              max_session_number>;
 
 public:
-    void register_session(network::ipv v, network::buffer_address_type remote_address,
-                          network::port_type remote_port, noise::noise_role role,
-                          noise::buffer_prologue_extention_type      ext,
-                          const noise_context_type::keypair_type    &local_keypair,
-                          const noise_context_type::buffer_key_type &remote_public_key,
-                          const noise::buffer_pre_shared_key_type   &pre_shared_key);
-    void set_running(bool value);
-    bool get_running();
-    void run();
+    inline void
+        register_session(network::ipv v, network::buffer_address_type remote_address,
+                         network::port_type remote_port, noise::noise_role role,
+                         noise::buffer_prologue_extention_type      ext,
+                         const noise_context_type::keypair_type    &local_keypair,
+                         const noise_context_type::buffer_key_type &remote_public_key,
+                         const noise::buffer_pre_shared_key_type   &pre_shared_key);
+    inline void set_running(bool value);
+    inline bool get_running();
+    inline void run();
 
-    void        send_packet(packet_type &&pckt);
-    packet_type get_packet();
+    inline void        send_packet(packet_type &&pckt);
+    inline packet_type get_packet();
 
 public:
-    bool init_packet(packet_type &pckt);
-    void handle_packet(packet_type &&pckt);
-    void set_error(const noheap::runtime_error &_excp);
+    inline bool init_packet(packet_type &pckt);
+    inline void handle_packet(packet_type &&pckt);
+    inline void set_error(const noheap::runtime_error &_excp);
 
 private:
-    essu::session_handler::session_s_type::iterator
+    inline essu::session_handler::session_s_type::iterator
         find_session(network::buffer_address_type remote_address);
 
 private:
@@ -63,11 +89,11 @@ void essu::session_handler::register_session(
     const noise::buffer_pre_shared_key_type   &pre_shared_key) {
     std::lock_guard<std::mutex> m_run_lock(m_run);
 
-    session_s.emplace_back(v, remote_address, remote_port, role, ext, remote_public_key,
-                           pre_shared_key, local_keypair);
+    session_s.emplace_back(log, v, remote_address, remote_port, role, ext,
+                           remote_public_key, pre_shared_key, local_keypair);
 
     log.to_all("Register new session: {}",
-               std::string_view(session_s[session_s.size() - 1].string_remote_address));
+               session_s[session_s.size() - 1].string_remote_address);
 }
 void essu::session_handler::set_running(bool value) {
     std::lock_guard<std::mutex> m_run_lock(m_run);
@@ -99,14 +125,17 @@ void essu::session_handler::run() {
                     }
                     if (receive_buffer.size())
                         receive_buffer.pop_front();
+                    continue;
                 }
 
                 // If status of session is START:
                 //  1. If session has 0 handshake before(session has just been registered)
                 //  2. If it was received retry-packet
                 session_status = protocol::update_status(session_info);
-                if (session_status == session_info_type::status_enum::START)
+                if (session_status == session_info_type::status_enum::START) {
                     protocol::start_handshake(session_info);
+                    session_info.log.to_all("Performing handshake...");
+                }
 
                 // If status of session is EXCHANGE:
                 //  - if session waits to send or receive handshake packet
@@ -129,8 +158,10 @@ void essu::session_handler::run() {
 
                 // If status of session is STOP
                 session_status = protocol::get_status(session_info);
-                if (session_status == session_info_type::status_enum::STOP)
+                if (session_status == session_info_type::status_enum::STOP) {
                     protocol::stop_handshake(session_info);
+                    session_info.log.to_all("Finished handshake.");
+                }
             }
 
             return !running;

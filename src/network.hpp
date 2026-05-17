@@ -23,11 +23,11 @@ enum class ipv {
 };
 
 namespace utils {
-    buffer_address_type        get_address_bytes(address_type addr);
-    address_type               get_address_object(buffer_address_type addr, ipv v);
-    buffer_string_address_type bytes_address_to_string(buffer_address_type address,
+    inline buffer_address_type        get_address_bytes(address_type addr);
+    inline address_type               get_address_object(buffer_address_type addr, ipv v);
+    inline buffer_string_address_type bytes_address_to_string(buffer_address_type address,
                                                        ipv                 v);
-    buffer_address_type        string_address_to_bytes(std::string_view address, ipv v);
+    inline buffer_address_type        string_address_to_bytes(std::string_view address, ipv v);
 } // namespace utils
 
 template<typename T>
@@ -150,12 +150,12 @@ public:
     ~udp_stream();
 
 public:
-    auto          &get_action();
-    decltype(auto) get_executor();
-    decltype(auto) get_port() const;
-    decltype(auto) get_running() const;
-    void           open(ipv v);
-    void           close();
+    inline auto          &get_action();
+    inline decltype(auto) get_executor();
+    inline decltype(auto) get_port() const;
+    inline decltype(auto) get_running() const;
+    void                  open(ipv v);
+    inline void           close();
 
 private:
     void register_async_send();
@@ -290,7 +290,7 @@ void udp_stream<Action>::register_async_send() {
                 asio::const_buffer          buffer{pckt.data(), pckt.size()};
                 endpoint_type               remote_endpoint{
                     utils::get_address_object(native_remote_endpoint.address,
-                                              native_remote_endpoint.v),
+                                                            native_remote_endpoint.v),
                     native_remote_endpoint.port};
 
                 if (native_remote_endpoint.v == ipv::v4)

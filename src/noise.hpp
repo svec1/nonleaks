@@ -65,7 +65,7 @@ enum class hash_type : std::uint16_t {
     SHA3512 = NOISE_HASH_SHA3512,
 };
 
-noise_pattern get_noise_pattern(const std::string_view pattern_string) {
+inline noise_pattern get_noise_pattern(const std::string_view pattern_string) {
     if (pattern_string == "XX")
         return noise_pattern::XX;
     else if (pattern_string == "XX_HFS")
@@ -76,15 +76,14 @@ noise_pattern get_noise_pattern(const std::string_view pattern_string) {
         return noise_pattern::XK_HFS;
     return noise_pattern::UNKNOWN;
 }
-
-noise_role get_noise_role(const std::string_view role_string) {
+inline noise_role get_noise_role(const std::string_view role_string) {
     if (role_string == "INITIATOR")
         return noise_role::INITIATOR;
     else if (role_string == "RESPONDER")
         return noise_role::RESPONDER;
     return noise_role::UNKNOWN;
 }
-std::string_view get_noise_role_string(noise_role role) {
+inline std::string_view get_noise_role_string(noise_role role) {
     if (role == noise_role::INITIATOR)
         return "INITIATOR";
     else if (role == noise_role::RESPONDER)
@@ -208,15 +207,15 @@ class noise_context {
 public:
     static constexpr noise::noise_context_config config = _config;
     static constexpr NoiseProtocolId             nid_static{
-        .prefix_id  = NOISE_PREFIX_PSK,
-        .pattern_id = static_cast<std::uint16_t>(config.pattern),
-        .dh_id      = static_cast<std::uint16_t>(
+                    .prefix_id  = NOISE_PREFIX_PSK,
+                    .pattern_id = static_cast<std::uint16_t>(config.pattern),
+                    .dh_id      = static_cast<std::uint16_t>(
             ecdh_type(static_cast<std::uint16_t>(config.ecdh) ^ NOISE_DH_KYBER1024)),
-        .cipher_id = static_cast<std::uint16_t>(config.cipher),
-        .hash_id   = static_cast<std::uint16_t>(config.hash),
-        .hybrid_id = (config.ecdh == ecdh_type::X25519_KYBER1024) ? NOISE_DH_KYBER1024
-                                                                  : NOISE_DH_NONE,
-        .reserved  = {},
+                    .cipher_id = static_cast<std::uint16_t>(config.cipher),
+                    .hash_id   = static_cast<std::uint16_t>(config.hash),
+                    .hybrid_id = (config.ecdh == ecdh_type::X25519_KYBER1024) ? NOISE_DH_KYBER1024
+                                                                              : NOISE_DH_NONE,
+                    .reserved = {},
     };
 
 public:
@@ -267,6 +266,27 @@ public:
     };
 
     struct random_state {
+        struct uniform_random_generator {
+            using result_type = std::size_t;
+
+        public:
+            uniform_random_generator(random_state &_random_st) : random_st(_random_st) {}
+
+            result_type operator()() {
+                result_type value;
+                random_st.padding_buffer.set(
+                    {reinterpret_cast<noheap::rbyte *>(&value), sizeof(value)}, 0);
+                random_st.pad();
+                return value;
+            }
+
+            static constexpr std::size_t min() { return 0; }
+            static constexpr std::size_t max() { return result_type(-1); }
+
+        private:
+            random_state &random_st;
+        };
+
     public:
         random_state();
 
@@ -281,7 +301,8 @@ public:
         void reseed();
 
     public:
-        noise_buffer_view padding_buffer{};
+        noise_buffer_view        padding_buffer;
+        uniform_random_generator generator;
 
     private:
         NoiseRandState *randstate = nullptr;
@@ -414,7 +435,7 @@ private:
 
 // Random state
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::random_state::random_state() {
+noise::noise_context<_config>::random_state::random_state() : generator(*this) {
     std::size_t ret;
     if ((ret = noise_randstate_new(&randstate)) != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to init random state.");
@@ -430,8 +451,11 @@ void noise::noise_context<_config>::random_state::pad() {
     std::size_t ret;
     if ((ret = noise_randstate_pad(randstate, noise_buffer.data, noise_buffer.size,
                                    noise_buffer.max_size, NOISE_PADDING_RANDOM))
-        != NOISE_ERROR_NONE)
+        != NOISE_ERROR_NONE){
         handle_error(ret, "Failed to pad.");
+	}
+
+	padding_buffer.set({}, 0);
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::random_state::reseed() {

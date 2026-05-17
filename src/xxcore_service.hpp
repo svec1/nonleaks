@@ -4,9 +4,8 @@
 #include <boost/json.hpp>
 #include <boost/json/src.hpp>
 
-#include "audio_flow.hpp"
-#include "essu_session.hpp"
 #include "stream_audio.hpp"
+#include "essu_session.hpp"
 
 using namespace boost;
 
@@ -46,14 +45,14 @@ public:
     using buffer_config_type = noheap::buffer_type<char, max_size_config>;
 
 public:
-    void set_buffer_config(const buffer_config_type &buffer, bool new_keypair);
-    void get_buffer_config(buffer_config_type &buffer);
+    inline void set_buffer_config(const buffer_config_type &buffer, bool new_keypair);
+    inline void get_buffer_config(buffer_config_type &buffer);
 
-    config_type &get_config();
+    inline config_type &get_config();
 
 private:
     template<typename T>
-    T get_object_field(const json::object &value, const std::string_view field_string);
+    inline T get_object_field(const json::object &value, const std::string_view field_string);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -71,9 +70,8 @@ public:
     using udp_stream = network::udp_stream<essu::session_handler>;
 
 public:
-    xxcore_service(config_type &config);
-
-    void run();
+    inline xxcore_service(config_type &config);
+    inline void run();
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -171,7 +169,7 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
                          })
             != config.endpoint_meta_s.end())
             throw noheap::runtime_error(buffer_owner, "Endpoint[{}] is already exist.",
-                                        global_field_key);
+                                        global_field_key.data());
 
         config_type::endpoint_meta_type endpoint_meta{};
         decltype(auto)                  object = global_field_value.as_object();

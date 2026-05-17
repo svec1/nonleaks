@@ -8,7 +8,7 @@ using re  = noheap::runtime_error;
 
 constexpr log_handler log_main{{}};
 constexpr auto        name_config_file = "xxcore.json";
-constexpr auto usage_string = "Usage: xxcore [-d sound device] [-i ip host] [-p port]";
+constexpr auto usage_string = "Usage: xxcore [-k generate a new local keypair]";
 
 struct xxcore_config {
     std::string_view device;

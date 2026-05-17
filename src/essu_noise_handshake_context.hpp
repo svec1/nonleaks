@@ -18,34 +18,34 @@ private:
     };
 
 public:
-    noise_handshake_context(noise::noise_role                          _role,
-                            noise::buffer_prologue_extention_type      _ext,
-                            const noise_context_type::buffer_key_type &_remote_public_key,
-                            const noise::buffer_pre_shared_key_type   &_pre_shared_key,
-                            const noise_context_type::keypair_type    &_local_keypair);
-    noise_handshake_context(noise_handshake_context &&other);
+    inline noise_handshake_context(
+        noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
+        const noise_context_type::buffer_key_type &_remote_public_key,
+        const noise::buffer_pre_shared_key_type   &_pre_shared_key,
+        const noise_context_type::keypair_type    &_local_keypair);
+    inline noise_handshake_context(noise_handshake_context &&other);
 
 public:
-    void init_packet(packet_type &pckt);
-    void handle_packet(packet_type &&pckt);
+    inline void init_packet(packet_type &pckt);
+    inline void handle_packet(packet_type &&pckt);
 
-    bool                                       is_complete() const;
-    noise::noise_action                        get_action() const;
-    std::uint16_t                              get_available_batch_number() const;
-    std::uint64_t                              get_handshake_id() const;
-    const noise_context_type::buffer_key_type &get_remote_public_key() const;
-    typename noise_context_type::cipher_state &get_payload_cipher_state();
-    typename noise_context_type::cipher_state &get_header_cipher_state_sender();
-    typename noise_context_type::cipher_state &get_header_cipher_state_receiver();
-    typename noise_context_type::random_state &get_random_state();
+    inline bool                                       is_complete() const;
+    inline noise::noise_action                        get_action() const;
+    inline std::uint16_t                              get_available_batch_number() const;
+    inline std::uint64_t                              get_handshake_id() const;
+    inline const noise_context_type::buffer_key_type &get_remote_public_key() const;
+    inline typename noise_context_type::cipher_state &get_payload_cipher_state();
+    inline typename noise_context_type::cipher_state &get_header_cipher_state_sender();
+    inline typename noise_context_type::cipher_state &get_header_cipher_state_receiver();
+    inline typename noise_context_type::random_state &get_random_state();
 
-    void start();
-    void stop();
+    inline void start();
+    inline void stop();
 
 private:
-    void check_noise_action(noise::noise_action expected);
-    void generate_pair_ephemeral_obfs_key();
-    void generate_posthandshake_unique_values();
+    inline void check_noise_action(noise::noise_action expected);
+    inline void generate_pair_ephemeral_obfs_key();
+    inline void generate_posthandshake_unique_values();
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =

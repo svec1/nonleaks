@@ -22,27 +22,27 @@ public:
 private:
     class input : public default_base_audio {
     public:
-        input();
+        inline input();
 
     public:
-        buffer_type read_samples();
+        inline buffer_type read_samples();
     };
     class output : public default_base_audio {
     public:
-        output();
+        inline output();
 
     public:
-        void write_samples(const buffer_type &bytes);
+        inline void write_samples(const buffer_type &bytes);
     };
 
 public:
-    ca_type::encode_buffer_type read();
+    inline ca_type::encode_buffer_type read();
 
-    void write(const ca_type::encode_buffer_type &buffer, bool lost);
+    inline void write(const ca_type::encode_buffer_type &buffer, bool lost);
 
 public:
-    void set_mute_read(bool flag) { in.set_mute(flag, false); }
-    void set_mute_write(bool flag) { out.set_mute(flag, flag); }
+    inline void set_mute_read(bool flag) { in.set_mute(flag, false); }
+    inline void set_mute_write(bool flag) { out.set_mute(flag, flag); }
 
 private:
     input  in;

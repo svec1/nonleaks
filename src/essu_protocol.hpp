@@ -24,11 +24,9 @@ public:
                       const noise_context_type::buffer_key_type &_remote_public_key,
                       const noise::buffer_pre_shared_key_type   &_pre_shared_key,
                       const noise_context_type::keypair_type    &_local_keypair)
-        : v(_v), remote_address(_remote_address),
-          string_remote_address(
-              network::utils::bytes_address_to_string(remote_address, v)),
-          remote_port(_remote_port), handshake_context(_role, _ext, _remote_public_key,
-                                                       _pre_shared_key, _local_keypair) {
+        : v(_v), remote_address(_remote_address), remote_port(_remote_port),
+          handshake_context(_role, _ext, _remote_public_key, _pre_shared_key,
+                            _local_keypair) {
         reset_state();
     }
     session_info_type(const session_info_type &) = delete;
@@ -49,9 +47,8 @@ private:
     }
 
 public:
-    const network::ipv                        v;
-    const network::buffer_address_type        remote_address;
-    const network::buffer_string_address_type string_remote_address;
+    const network::ipv                 v;
+    const network::buffer_address_type remote_address;
 
     std::uint16_t remote_port;
 
@@ -75,31 +72,34 @@ struct protocol final {
     protocol() = delete;
 
 public:
-    static void prepare(packet_type &pckt, session_info_type &session_info);
-    static void handle(packet_type &pckt, session_info_type &session_info);
+    static inline void prepare(packet_type &pckt, session_info_type &session_info);
+    static inline void handle(packet_type &pckt, session_info_type &session_info);
 
-    static void start_handshake(session_info_type &session_info);
-    static void stop_handshake(session_info_type &session_info);
-    static void init_handshake_packet(session_info_type &session_info, packet_type &pckt);
-    static void handle_handshake_packet(session_info_type &session_info,
-                                        packet_type      &&pckt);
+    static inline void start_handshake(session_info_type &session_info);
+    static inline void stop_handshake(session_info_type &session_info);
+    static inline void init_handshake_packet(session_info_type &session_info,
+                                             packet_type       &pckt);
+    static inline void handle_handshake_packet(session_info_type &session_info,
+                                               packet_type      &&pckt);
 
-    static session_info_type::status_enum update_status(session_info_type &session_info);
+    static inline session_info_type::status_enum
+        update_status(session_info_type &session_info);
 
-    static session_info_type::status_enum
-                         get_status(const session_info_type &session_info);
-    static std::uint64_t get_handshake_number(const session_info_type &session_info);
-    static std::uint64_t get_handshake_id(const session_info_type &session_info);
-    static bool          can_send_packet(const session_info_type &session_info);
-    static bool          can_receive_packet(const session_info_type &session_info);
+    static inline session_info_type::status_enum
+        get_status(const session_info_type &session_info);
+    static inline std::uint64_t
+        get_handshake_number(const session_info_type &session_info);
+    static inline std::uint64_t get_handshake_id(const session_info_type &session_info);
+    static inline bool          can_send_packet(const session_info_type &session_info);
+    static inline bool          can_receive_packet(const session_info_type &session_info);
 
 private:
-    static void check_sesssion_state(const session_info_type &session_info);
-    static void
+    static inline void check_sesssion_state(const session_info_type &session_info);
+    static inline void
         check_protocol_compliance(bool                      handshake_complete,
                                   unit_type::unit_type_enum batch_type,
                                   unit_type::unit_type_enum payload_unit_two_type);
-    static noise::buffer_type<header_data_size> derive_header_obfs_key(
+    static inline noise::buffer_type<header_data_size> derive_header_obfs_key(
         typename noise_context_type::cipher_state &header_cipher_state);
 
 private:
@@ -111,8 +111,6 @@ private:
 } // namespace essu
 
 void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info) {
-    thread_local std::mt19937 generator(std::random_device{}());
-
     decltype(auto) payload_cipher_state =
         session_info.handshake_context.get_payload_cipher_state();
     decltype(auto) header_cipher_state =
@@ -204,7 +202,7 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
     }
 
     // Shuffles units in batch
-    std::shuffle(pckt->units.begin(), pckt->units.end(), generator);
+    std::shuffle(pckt->units.begin(), pckt->units.end(), random_state.generator);
 
     ++session_info.batches_sent_number;
 }

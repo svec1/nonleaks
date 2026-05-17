@@ -10,24 +10,19 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <format>
 #include <future>
-#include <memory_resource>
 #include <mutex>
-#include <queue>
-#include <random>
 #include <span>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 namespace std {
 using ssize_t = std::make_signed_t<std::size_t>;
 } // namespace std
 
-std::size_t get_now_ms() {
+inline std::size_t get_now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();
@@ -194,9 +189,9 @@ public:
                          .out;
         }
 
-        end_it  = std::format_to_n(end_it, std::abs(std::distance(buffer.end(), end_it)),
-                                   format, std::forward<Args>(args)...)
-                      .out;
+        end_it = std::format_to_n(end_it, std::abs(std::distance(buffer.end(), end_it)),
+                                  format, std::forward<Args>(args)...)
+                     .out;
         *end_it = '\n';
         return buffer;
     }
@@ -822,6 +817,36 @@ private:
 private:
     std::array<std::size_t, max_outstream_count> out_streams{};
     noheap::log_impl::owner_impl::buffer_type    buffer_owner;
+};
+
+class log_proxy {
+public:
+    constexpr log_proxy(const log_handler &_log) : log(_log) {}
+    constexpr log_proxy(const log_handler &_log, std::string_view _dynamic_owner)
+        : log(_log), dynamic_owner(_dynamic_owner) {}
+
+public:
+    void set_dynamic_owner(std::string_view _dynamic_owner) {
+        dynamic_owner = _dynamic_owner;
+    }
+	template<typename T>
+    decltype(auto) get_log_handler(this T&& _this) { return _this.log; }
+
+    template<log_handler::output_type async = log_handler::output_type::flush,
+             typename... Args>
+    void to_all(std::format_string<Args...> format, Args &&...args) const {
+        noheap::print_impl::buffer_type buffer;
+        auto                            end_it = buffer.begin();
+        end_it = std::format_to_n(end_it, noheap::print_impl::buffer_size, format,
+                                  std::forward<Args>(args)...)
+                     .out;
+
+        log.to_all("<{}> {}", dynamic_owner, buffer.data());
+    }
+
+private:
+    const log_handler     &log;
+    std::string_view dynamic_owner = "";
 };
 
 template<typename TReturn>
