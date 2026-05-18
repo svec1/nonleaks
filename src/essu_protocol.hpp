@@ -24,7 +24,7 @@ public:
                       const noise_context_type::buffer_key_type &_remote_public_key,
                       const noise::buffer_pre_shared_key_type   &_pre_shared_key,
                       const noise_context_type::keypair_type    &_local_keypair)
-        : v(_v), remote_address(_remote_address), remote_port(_remote_port),
+        : remote_endpoint(_v, _remote_address, _remote_port),
           handshake_context(_role, _ext, _remote_public_key, _pre_shared_key,
                             _local_keypair) {
         reset_state();
@@ -47,10 +47,7 @@ private:
     }
 
 public:
-    const network::ipv                 v;
-    const network::buffer_address_type remote_address;
-
-    std::uint16_t remote_port;
+    network::native_endpoint remote_endpoint;
 
 private:
     noise_handshake_context handshake_context;
@@ -117,30 +114,33 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         session_info.handshake_context.get_header_cipher_state_sender();
     decltype(auto) random_state = session_info.handshake_context.get_random_state();
 
-    bool session_handshake_complete = session_info.handshake_context.is_complete();
+    bool is_control_session_packet = is_control_session_packet_type(pckt);
+    bool session_handshake_complete =
+        session_info.handshake_context.is_complete() && !is_control_session_packet;
 
     check_sesssion_state(session_info);
     if (session_handshake_complete && !can_send_packet(session_info))
         log.throw_exception("Expected to rehandshake.");
 
-    // If available batch number is reached
+    // If was received retry or available batch number is reached
     if (session_info.was_received_retry
         || (session_handshake_complete
             && session_info.batches_sent_number
                    == session_info.handshake_context.get_available_batch_number())) {
-        pckt->units[2].header.type  = unit_type::unit_type_enum::retry;
-        session_info.was_sent_retry = true;
+        set_control_session_packet(pckt, unit_type::unit_type_enum::retry);
+        session_info.was_sent_retry        = true;
     }
+
+    // Forces control and last unit to be dummy
+    if (!is_control_session_packet)
+        set_dummy_unit(get_control_unit(pckt));
+    set_dummy_unit(get_last_unit(pckt));
 
     for (std::uint64_t i = 0; i < pckt->units.size(); ++i) {
         unit_type &unit = pckt->units[i];
 
         unit.header.number               = session_info.sender_units_number++;
         unit.header.key_iteration_number = session_info.sender_key_iteration_number;
-
-        // Forces units to be dummy if necessary
-        if (i >= 2 && unit.header.type != unit_type::unit_type_enum::retry)
-            unit.header.type = unit_type::unit_type_enum::dummy;
 
         // Adds random padding
         {
@@ -298,7 +298,7 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
 
     // If available batch number is reached
     if (session_handshake_complete
-        && pckt->units[2].header.type == unit_type::unit_type_enum::retry)
+        && get_control_unit(pckt).header.type == unit_type::unit_type_enum::retry)
         session_info.was_received_retry = true;
 }
 void essu::protocol::init_handshake_packet(session_info_type &session_info,

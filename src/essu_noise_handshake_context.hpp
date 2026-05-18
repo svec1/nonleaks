@@ -98,10 +98,8 @@ essu::noise_handshake_context::noise_handshake_context(
 void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     check_noise_action(noise::noise_action::WRITE_MESSAGE);
 
-    auto &payload_unit = pckt->units[0];
-
-    // Handshake does not need to send 2 units
-    pckt->units[1].header.type = unit_type::unit_type_enum::dummy;
+	set_dummy_packet(pckt);
+    auto &control_unit = get_control_unit(pckt);
 
     // Gets noise message
     if (!fragmentation) {
@@ -131,17 +129,17 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     // Copy payload of the noise message
     std::copy(buffer_handshake_message.begin() + offset_noise_handshake_unit,
               buffer_handshake_message.begin() + offset_noise_handshake_unit
-                  + payload_unit.buffer.size(),
-              reinterpret_cast<noheap::rbyte *>(payload_unit.buffer.begin()));
-    offset_noise_handshake_unit += payload_unit.buffer.size();
+                  + control_unit.buffer.size(),
+              reinterpret_cast<noheap::rbyte *>(control_unit.buffer.begin()));
+    offset_noise_handshake_unit += control_unit.buffer.size();
 
     // Determines type of payload data
     if (status == status_enum::HS1)
-        payload_unit.header.type = unit_type::unit_type_enum::session_request;
+        control_unit.header.type = unit_type::unit_type_enum::session_request;
     else if (status == status_enum::HS2)
-        payload_unit.header.type = unit_type::unit_type_enum::session_created;
+        control_unit.header.type = unit_type::unit_type_enum::session_created;
     else if (status == status_enum::HS3)
-        payload_unit.header.type = unit_type::unit_type_enum::session_confirmed;
+        control_unit.header.type = unit_type::unit_type_enum::session_confirmed;
     else
         this->log.abort_invalid_state();
 
@@ -153,9 +151,9 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
 
     std::size_t occupied_bytes =
         (noise_context.get_handshake_buffer().get().size
-         - (offset_noise_handshake_unit - payload_unit.buffer.size()));
+         - (offset_noise_handshake_unit - control_unit.buffer.size()));
     random_state.padding_buffer.set(
-        {payload_unit.buffer.data(), payload_unit.buffer.size()}, occupied_bytes);
+        {control_unit.buffer.data(), control_unit.buffer.size()}, occupied_bytes);
     random_state.pad();
 
     buffer_handshake_message    = {};
@@ -166,7 +164,7 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
 void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
     check_noise_action(noise::noise_action::READ_MESSAGE);
 
-    auto &payload_unit = pckt->units[0];
+    auto &control_unit = get_control_unit(pckt);
 
     // Determines size of payload data
     std::uint64_t payload_size = 0;
@@ -180,17 +178,17 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
         this->log.abort_invalid_state();
 
     if ((status == status_enum::HS1
-         && payload_unit.header.type != unit_type::unit_type_enum::session_request)
+         && control_unit.header.type != unit_type::unit_type_enum::session_request)
         || (status == status_enum::HS2
-            && payload_unit.header.type != unit_type::unit_type_enum::session_created)
+            && control_unit.header.type != unit_type::unit_type_enum::session_created)
         || (status == status_enum::HS3
-            && payload_unit.header.type != unit_type::unit_type_enum::session_confirmed))
+            && control_unit.header.type != unit_type::unit_type_enum::session_confirmed))
         this->log.throw_exception("Invalid type of handshake packet.");
 
     // Copies accepted unit to buffer of noise handshake message
-    std::copy(payload_unit.buffer.begin(), payload_unit.buffer.end(),
+    std::copy(control_unit.buffer.begin(), control_unit.buffer.end(),
               buffer_handshake_message.begin() + offset_noise_handshake_unit);
-    offset_noise_handshake_unit += payload_unit.buffer.size();
+    offset_noise_handshake_unit += control_unit.buffer.size();
 
     // If fragmentation
     if (payload_size >= offset_noise_handshake_unit)

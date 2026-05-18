@@ -22,8 +22,8 @@ class session_handler : public network::action<packet_type> {
             const noise_context_type::keypair_type    &_local_keypair)
             : session_info_type(_v, _remote_address, _remote_port, _role, _ext,
                                 _remote_public_key, _pre_shared_key, _local_keypair),
-              _string_remote_address(
-                  network::utils::bytes_address_to_string(remote_address, v)),
+              _string_remote_address(network::utils::bytes_address_to_string(
+                  remote_endpoint.address, remote_endpoint.v)),
               log(_log_handler, string_remote_address) {}
 
     private:
@@ -60,7 +60,7 @@ public:
 
 private:
     inline essu::session_handler::session_s_type::iterator
-        find_session(network::buffer_address_type remote_address);
+        find_session(network::buffer_address_type remote_endpoint_address);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -78,6 +78,7 @@ private:
     bool                                                      running = true;
     bool                                                      failed  = false;
 };
+
 } // namespace essu
 
 void essu::session_handler::register_session(
@@ -113,21 +114,6 @@ void essu::session_handler::run() {
             for (decltype(auto) session_info : session_s) {
                 decltype(auto) session_status = protocol::get_status(session_info);
 
-                // For testing
-                if (session_status == session_info_type::status_enum::COMPLETE) {
-                    if (!send_buffer.size() && protocol::can_send_packet(session_info)) {
-                        packet_type pckt;
-                        pckt.set_endpoint({session_info.v, session_info.remote_address,
-                                           session_info.remote_port});
-                        pckt->units[0].header.type = pckt->units[1].header.type =
-                            decltype(pckt->units[0].header.type)::dummy;
-                        send_buffer.push_back(pckt);
-                    }
-                    if (receive_buffer.size())
-                        receive_buffer.pop_front();
-                    continue;
-                }
-
                 // If status of session is START:
                 //  1. If session has 0 handshake before(session has just been registered)
                 //  2. If it was received retry-packet
@@ -148,8 +134,7 @@ void essu::session_handler::run() {
                     }
                     if (protocol::can_send_packet(session_info)) {
                         packet_type pckt;
-                        pckt.set_endpoint({session_info.v, session_info.remote_address,
-                                           session_info.remote_port});
+                        pckt.set_endpoint(session_info.remote_endpoint);
 
                         protocol::init_handshake_packet(session_info, pckt);
                         send_buffer.push_back(pckt);
@@ -157,10 +142,24 @@ void essu::session_handler::run() {
                 }
 
                 // If status of session is STOP
-                session_status = protocol::get_status(session_info);
+                session_status = protocol::update_status(session_info);
                 if (session_status == session_info_type::status_enum::STOP) {
                     protocol::stop_handshake(session_info);
                     session_info.log.to_all("Finished handshake.");
+                }
+
+                // For testing
+				if (session_status == session_info_type::status_enum::COMPLETE) {
+                    if (!send_buffer.size() && protocol::can_send_packet(session_info)) {
+                        packet_type pckt;
+                        pckt.set_endpoint(session_info.remote_endpoint);
+                        pckt->units[0].header.type = pckt->units[1].header.type =
+                            decltype(pckt->units[0].header.type)::dummy;
+                        send_buffer.push_back(pckt);
+                    }
+                    if (receive_buffer.size())
+                        receive_buffer.pop_front();
+                    continue;
                 }
             }
 
@@ -212,7 +211,7 @@ void essu::session_handler::handle_packet(packet_type &&pckt) {
     {
         decltype(auto) session_info_it = this->find_session(pckt.get_endpoint().address);
         decltype(auto) session_info    = *session_info_it;
-        session_info.remote_port       = pckt.get_endpoint().port;
+        session_info.remote_endpoint.port       = pckt.get_endpoint().port;
 
         protocol::handle(pckt, session_info);
 
@@ -232,10 +231,10 @@ void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
 }
 
 essu::session_handler::session_s_type::iterator
-    essu::session_handler::find_session(network::buffer_address_type remote_address) {
+    essu::session_handler::find_session(network::buffer_address_type remote_endpoint_address) {
     decltype(auto) it = std::find_if(session_s.begin(), session_s.end(),
-                                     [remote_address](const session_info_type &el) {
-                                         return el.remote_address == remote_address;
+                                     [remote_endpoint_address](const session_info_type &el) {
+                                         return el.remote_endpoint.address == remote_endpoint_address;
                                      });
     if (it == session_s.end())
         log.throw_exception("Invalid packet address.");

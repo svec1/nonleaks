@@ -372,7 +372,7 @@ public:
         for (auto it_tmp = this->end() - 2; it_tmp >= it; --it_tmp)
             std::swap(*it_tmp, *(it_tmp + 1));
 
-        *it = T{std::forward<Args>(args)...};
+        *it = T(std::forward<Args>(args)...);
         ++count_pushed;
     }
     iterator erase(iterator it) {
