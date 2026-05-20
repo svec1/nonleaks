@@ -126,15 +126,18 @@ void essu::session_handler::run() {
                     session_info.log.throw_exception("Timeout has been reached.");
 
                 // If status of session is START or STOP:
-                decltype(auto) session_status = protocol::get_status(session_info);
-                if (session_status == session_info_type::status_enum::START)
+                decltype(auto) session_status = protocol::update_status(session_info);
+                if (session_status == session_info_type::status_enum::START){
+					protocol::start_handshake(session_info);
 					session_info.log.to_all("Performing handshake...");
-                else if (session_status == session_info_type::status_enum::STOP)
+				}
+                else if (session_status == session_info_type::status_enum::COMPLETE){
+					protocol::stop_handshake(session_info);
                     session_info.log.to_all("Handshake completed.");
+				}
 
                 // Dummy trafic
-                if (protocol::can_send_packet(session_info)
-                    && send_buffer.size() != buffer_packets_size) {
+                if (send_buffer.size() == 0) {
                     packet_type pckt;
                     pckt.set_endpoint(session_info.remote_endpoint);
                     set_dummy_packet(pckt);
