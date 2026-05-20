@@ -26,8 +26,8 @@ namespace utils {
     inline buffer_address_type        get_address_bytes(address_type addr);
     inline address_type               get_address_object(buffer_address_type addr, ipv v);
     inline buffer_string_address_type bytes_address_to_string(buffer_address_type address,
-                                                       ipv                 v);
-    inline buffer_address_type        string_address_to_bytes(std::string_view address, ipv v);
+                                                              ipv                 v);
+    inline buffer_address_type string_address_to_bytes(std::string_view address, ipv v);
 } // namespace utils
 
 template<typename T>
@@ -273,20 +273,18 @@ void udp_stream<Action>::register_async_send() {
         return;
 
     asio::post(socket_v4.get_executor(), [this] {
+        typename action_type::packet_type pckt;
         try {
-            typename action_type::packet_type pckt;
-
             // Performs init a packet base on TWrapper_packet protocol
             // NOTE: init_packet can wait
             if (!this->act.init_packet(pckt))
                 return;
 
-            auto native_remote_endpoint = pckt.get_endpoint();
-
             // Sends the packet
             {
                 system::error_code          ec;
                 std::lock_guard<std::mutex> m_lock(this->m);
+                auto                        native_remote_endpoint = pckt.get_endpoint();
                 asio::const_buffer          buffer{pckt.data(), pckt.size()};
                 endpoint_type               remote_endpoint{
                     utils::get_address_object(native_remote_endpoint.address,
@@ -303,7 +301,7 @@ void udp_stream<Action>::register_async_send() {
 
             this->register_async_send();
         } catch (const noheap::runtime_error &_excp) {
-            this->act.set_error(_excp);
+            this->act.set_error(_excp, pckt.get_endpoint().address);
             return;
         }
     });
@@ -315,41 +313,31 @@ void udp_stream<Action>::register_async_receive(ipv v) {
         return;
 
     const auto handler = [this, v](system::error_code ec, std::size_t) {
+        decltype(auto) pckt = v == ipv::v4 ? this->receive_pckt_v4 : this->receive_pckt_v6;
         try {
             handle_error(ec);
+
+            // Handles the packet TWrapper_packet protocol
             {
                 std::lock_guard<std::mutex> m_lock(this->m);
-                // Handles the packet TWrapper_packet protocol
-                if (v == ipv::v4) {
-                    this->receive_pckt_v4.set_endpoint(
-                        {v, utils::get_address_bytes(this->receive_endpoint_v4.address()),
-                         this->receive_endpoint_v4.port()});
-                    this->act.handle_packet(std::move(this->receive_pckt_v4));
-                    this->receive_pckt_v4 = {};
-                } else {
-                    this->receive_pckt_v6.set_endpoint(
-                        {v, utils::get_address_bytes(this->receive_endpoint_v6.address()),
-                         this->receive_endpoint_v6.port()});
-                    this->act.handle_packet(std::move(this->receive_pckt_v6));
-                    this->receive_pckt_v6 = {};
-                }
+                pckt.set_endpoint(
+                    {v, utils::get_address_bytes(this->receive_endpoint_v4.address()),
+                     this->receive_endpoint_v4.port()});
+                this->act.handle_packet(std::move(pckt));
+                pckt = {};
             }
             this->register_async_receive(v);
         } catch (const noheap::runtime_error &_excp) {
-            this->act.set_error(_excp);
+            this->act.set_error(_excp, pckt.get_endpoint().address);
             return;
         };
     };
 
     // Waits for a new packet
-    if (v == ipv::v4)
-        this->socket_v4.async_receive_from(
-            asio::mutable_buffer{receive_pckt_v4.data(), receive_pckt_v4.size()},
-            receive_endpoint_v4, 0, handler);
-    else
-        this->socket_v6.async_receive_from(
-            asio::mutable_buffer{receive_pckt_v6.data(), receive_pckt_v6.size()},
-            receive_endpoint_v6, 0, handler);
+    decltype(auto) socket = v == ipv::v4 ? this->socket_v4 : this->socket_v6;
+    socket.async_receive_from(
+        asio::mutable_buffer{receive_pckt_v4.data(), receive_pckt_v4.size()},
+        receive_endpoint_v4, 0, handler);
 }
 
 template<Derived_from_action Action>

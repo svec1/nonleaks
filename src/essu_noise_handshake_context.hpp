@@ -98,7 +98,6 @@ essu::noise_handshake_context::noise_handshake_context(
 void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     check_noise_action(noise::noise_action::WRITE_MESSAGE);
 
-	set_dummy_packet(pckt);
     auto &control_unit = get_control_unit(pckt);
 
     // Gets noise message

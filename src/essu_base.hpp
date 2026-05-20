@@ -37,11 +37,10 @@ public:
         session_request = 0,
         session_created,
         session_confirmed,
-        token_request,
+        retry,
         hole_punch,
         data,
         dummy,
-        retry,
     };
 
     struct header_data_type {
@@ -83,7 +82,7 @@ inline decltype(auto) get_last_unit(T &&pckt) {
 }
 template<Packet_type T>
 inline decltype(auto) get_control_unit(T &&pckt) {
-    return pckt->units[control_unit_number -1];
+    return pckt->units[control_unit_number - 1];
 }
 
 inline bool is_control_session_unit_type(unit_type::unit_type_enum type) {
@@ -96,6 +95,12 @@ inline bool is_control_payload_packet_type(const packet_type &pckt) {
 }
 inline bool is_control_session_packet_type(const packet_type &pckt) {
     return is_control_session_unit_type(get_control_unit(pckt).header.type);
+}
+inline bool is_dummy_packet_type(const packet_type &pckt) {
+    return (pckt->units[0].header.type == pckt->units[1].header.type
+            && pckt->units[1].header.type == pckt->units[2].header.type
+            && pckt->units[2].header.type == pckt->units[3].header.type
+            && pckt->units[3].header.type == unit_type::unit_type_enum::dummy);
 }
 inline void set_dummy_unit(unit_type &unit) {
     unit.header.type = unit_type::unit_type_enum::dummy;

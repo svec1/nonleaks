@@ -13,7 +13,6 @@
 #include <exception>
 #include <format>
 #include <future>
-#include <mutex>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -161,7 +160,7 @@ constexpr void println(std::format_string<Args...> format, Args &&...args) {
 class log_impl final {
 public:
     struct owner_impl final {
-        static constexpr std::size_t buffer_size = 24;
+        static constexpr std::size_t buffer_size = 64;
         using buffer_type                        = buffer_chars_type<buffer_size>;
     };
 
@@ -209,16 +208,16 @@ public:
             auto end_it = std::format_to_n(buffer.begin(), buffer_size, format,
                                            std::forward<Args>(args)...);
             *end_it.out = '\0';
-        }
+		}
     }
     template<typename... Args>
     runtime_error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
                   std::format_string<Args...>               format, Args &&...args)
         : runtime_error(format, std::forward<Args>(args)...) {
-        buffer_owner = _buffer_owner;
+        set_owner(_buffer_owner);
     }
-    runtime_error() = default;
     runtime_error(buffer_type &&_buffer) : buffer(std::move(_buffer)) {}
+    runtime_error() = default;
     runtime_error(const runtime_error &excp) {
         buffer = excp.buffer;
         set_owner(excp.buffer_owner);
@@ -822,31 +821,47 @@ private:
 class log_proxy {
 public:
     constexpr log_proxy(const log_handler &_log) : log(_log) {}
-    constexpr log_proxy(const log_handler &_log, std::string_view _dynamic_owner)
+    constexpr log_proxy(const log_handler &_log, noheap::log_impl::owner_impl::buffer_type _dynamic_owner)
         : log(_log), dynamic_owner(_dynamic_owner) {}
 
 public:
-    void set_dynamic_owner(std::string_view _dynamic_owner) {
+    void set_dynamic_owner(noheap::log_impl::owner_impl::buffer_type _dynamic_owner) {
         dynamic_owner = _dynamic_owner;
     }
-	template<typename T>
-    decltype(auto) get_log_handler(this T&& _this) { return _this.log; }
+    template<typename T>
+    decltype(auto) get_log_handler(this T &&_this) {
+        return _this.log;
+    }
 
     template<log_handler::output_type async = log_handler::output_type::flush,
              typename... Args>
     void to_all(std::format_string<Args...> format, Args &&...args) const {
-        noheap::print_impl::buffer_type buffer;
+        noheap::print_impl::buffer_type buffer{};
         auto                            end_it = buffer.begin();
         end_it = std::format_to_n(end_it, noheap::print_impl::buffer_size, format,
                                   std::forward<Args>(args)...)
                      .out;
 
-        log.to_all("<{}> {}", dynamic_owner, buffer.data());
+
+        log.to_all("<{}> {}", dynamic_owner.data(), buffer.data());
+    }
+
+    template<noheap::Derived_from_runtime_error TExcp = noheap::runtime_error,
+             typename... Args>
+    [[noreturn]] void throw_exception(std::format_string<Args...> format,
+                                      Args &&...args) const {
+        noheap::print_impl::buffer_type buffer{};
+        auto                            end_it = buffer.begin();
+        end_it = std::format_to_n(end_it, noheap::print_impl::buffer_size, format,
+                                  std::forward<Args>(args)...)
+                     .out;
+
+        log.throw_exception("<{}> {}", dynamic_owner.data(), buffer.data());
     }
 
 private:
-    const log_handler     &log;
-    std::string_view dynamic_owner = "";
+    const log_handler &log;
+	noheap::log_impl::owner_impl::buffer_type dynamic_owner{};
 };
 
 template<typename TReturn>
