@@ -37,8 +37,8 @@ private:
         status                        = status_enum::START;
         batch_sent_number             = 0;
         batch_received_number         = 0;
-        sender_unit_number           = 0;
-        receiver_unit_number         = 0;
+        sender_unit_number            = 0;
+        receiver_unit_number          = 0;
         sender_key_iteration_number   = 0;
         receiver_key_iteration_number = 0;
         undecrypted_batch_number      = 0;
@@ -86,8 +86,7 @@ private:
     static inline void check_protocol_compliance(const session_info_type &session_info,
                                                  packet_type             &pckt);
     static inline noise::buffer_type<header_data_size> derive_header_obfs_key(
-        typename noise_context_type::cipher_state &header_cipher_state,
-        std::uint64_t                              nonce = std::uint64_t(-1));
+        typename noise_context_type::cipher_state &header_cipher_state);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -210,15 +209,14 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
         log.throw_exception("Expected to rehandshake.");
 
     // Selects possible unit number
-    std::uint64_t count_decrypted_units = 0;
+    std::uint64_t count_decrypted_units   = 0;
+    std::uint64_t attempts_decrypt_number = 0;
     std::uint64_t available_units_window_number =
         session_info.receiver_unit_number + batch_window_number * batch_units_number;
-    for (std::uint64_t possible_unit_number = session_info.receiver_unit_number;
-         possible_unit_number < available_units_window_number;
-         ++possible_unit_number) {
+    std::uint64_t possible_unit_number = session_info.receiver_unit_number;
+    for (; possible_unit_number < available_units_window_number; ++possible_unit_number) {
         // Generates header obfuscation key based on the possible_unit_number
-        auto obfs_key_tmp =
-            derive_header_obfs_key(header_cipher_state, possible_unit_number);
+        auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         for (auto &unit : pckt->units) {
             unit_type test_unit = unit;
@@ -245,18 +243,17 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
                 payload_cipher_state.decrypt_buffer.set(
                     {test_unit.buffer.data(), test_unit.buffer.size()},
                     test_unit.buffer.size());
-
-                // Gets and increments the decrypt nonce(counter block)
-                auto buffer_nonce = payload_cipher_state.get_decrypt_nonce();
-                (*reinterpret_cast<std::uint64_t *>(buffer_nonce.data())) =
-                    possible_unit_number;
-                payload_cipher_state.set_decrypt_nonce(buffer_nonce);
-
                 try {
                     payload_cipher_state.decrypt(
                         {reinterpret_cast<noheap::rbyte *>(&test_unit.header),
                          sizeof(test_unit.header)});
                 } catch (const noheap::runtime_error &excp) {
+                    // Increments counter block of decrypt nonce
+                    noheap::println("{}",
+                                    payload_cipher_state.get_decrypt_counter_block());
+                    payload_cipher_state.set_decrypt_counter_block(
+                        payload_cipher_state.get_decrypt_counter_block() + 1);
+                    ++attempts_decrypt_number;
                     continue;
                 }
             }
@@ -276,11 +273,22 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
     if (count_decrypted_units != pckt->units.size()) {
         ++session_info.undecrypted_batch_number;
 
+        // Sets the previous value of decrypt payload and encrypt header nonces
+        {
+            if (session_handshake_complete)
+                payload_cipher_state.set_decrypt_counter_block(
+                    payload_cipher_state.get_decrypt_counter_block()
+                    - attempts_decrypt_number);
+            header_cipher_state.set_encrypt_counter_block(
+                header_cipher_state.get_encrypt_counter_block()
+                - (possible_unit_number - session_info.receiver_unit_number));
+        }
+
         // If performs handshake or was failed to decrypt
         // max_undecrypted_batches_number count packets after handshake
         if (!session_handshake_complete
             || session_info.undecrypted_batch_number == max_undecrypted_batch_number)
-            log.throw_exception("Failed to decrypt last batches.");
+            log.throw_exception("Failed to decrypt last batches. [attempts to decrypt payload: {}]", attempts_decrypt_number);
         return;
     } else
         session_info.undecrypted_batch_number = 0;
@@ -312,7 +320,7 @@ void essu::protocol::stop_handshake(session_info_type &session_info) {
     session_info.reset_state();
     session_info.handshake_context.stop();
     ++session_info.handshake_number;
-	session_info.status = session_info_type::status_enum::COMPLETE;
+    session_info.status = session_info_type::status_enum::COMPLETE;
 }
 essu::session_info_type::status_enum
     essu::protocol::update_status(session_info_type &session_info) {
@@ -366,22 +374,16 @@ void essu::protocol::check_protocol_compliance(const session_info_type &session_
     }
 }
 noise::buffer_type<essu::header_data_size> essu::protocol::derive_header_obfs_key(
-    typename noise_context_type::cipher_state &header_cipher_state,
-    std::uint64_t                              nonce_counter_block) {
+    typename noise_context_type::cipher_state &header_cipher_state) {
     noise::buffer_type<sizeof(typename essu::unit_type::header_data_type)
                        + noise_config.mac_size>
         obfs_key_tmp{};
     header_cipher_state.encrypt_buffer.set({obfs_key_tmp.data(), obfs_key_tmp.size()},
                                            obfs_key_tmp.size() - noise_config.mac_size);
-    if (nonce_counter_block != std::uint64_t(-1)) {
-        auto buffer_nonce = header_cipher_state.get_encrypt_nonce();
-        (*reinterpret_cast<std::uint64_t *>(buffer_nonce.data())) = nonce_counter_block;
-        header_cipher_state.set_encrypt_nonce(buffer_nonce);
-    }
     header_cipher_state.encrypt({});
 
-    return noheap::to_buffer<decltype(derive_header_obfs_key(
-        header_cipher_state, nonce_counter_block))>(obfs_key_tmp);
+    return noheap::to_buffer<decltype(derive_header_obfs_key(header_cipher_state))>(
+        obfs_key_tmp);
 }
 
 #endif

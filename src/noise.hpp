@@ -289,7 +289,7 @@ public:
                     {reinterpret_cast<noheap::rbyte *>(&value), sizeof(value)}, 0);
                 random_st.pad();
                 random_st.reseed();
-				return value;
+                return value;
             }
 
             static constexpr std::size_t min() { return 0; }
@@ -343,11 +343,15 @@ public:
 
         void set_encrypt_nonce(const buffer_nonce_type &nonce);
         void set_decrypt_nonce(const buffer_nonce_type &nonce);
+        void set_encrypt_counter_block(std::uint64_t counter);
+        void set_decrypt_counter_block(std::uint64_t counter);
         void set_encrypt_key(const buffer_key_type &key);
         void set_decrypt_key(const buffer_key_type &key);
 
-        buffer_nonce_type get_encrypt_nonce();
-        buffer_nonce_type get_decrypt_nonce();
+        buffer_nonce_type get_encrypt_nonce() const;
+        buffer_nonce_type get_decrypt_nonce() const;
+        std::uint64_t     get_encrypt_counter_block() const;
+        std::uint64_t     get_decrypt_counter_block() const;
 
     private:
         void set_states(NoiseCipherState *_encrypt_state,
@@ -575,6 +579,20 @@ void noise::noise_context<_config>::cipher_state::set_decrypt_nonce(
         handle_error(ret, "Failed to set decrypting nonce.");
 }
 template<noise::noise_context_config _config>
+void noise::noise_context<_config>::cipher_state::set_encrypt_counter_block(
+    std::uint64_t counter) {
+    decltype(auto) nonce_tmp = this->get_encrypt_nonce();
+    std::memcpy(&nonce_tmp, &counter, sizeof(counter));
+    this->set_encrypt_nonce(nonce_tmp);
+}
+template<noise::noise_context_config _config>
+void noise::noise_context<_config>::cipher_state::set_decrypt_counter_block(
+    std::uint64_t counter) {
+    decltype(auto) nonce_tmp = this->get_decrypt_nonce();
+    std::memcpy(&nonce_tmp, &counter, sizeof(counter));
+    this->set_decrypt_nonce(nonce_tmp);
+}
+template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_encrypt_key(
     const buffer_key_type &key) {
     std::size_t ret;
@@ -596,7 +614,7 @@ void noise::noise_context<_config>::cipher_state::set_decrypt_key(
 }
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::buffer_nonce_type
-    noise::noise_context<_config>::cipher_state::get_encrypt_nonce() {
+    noise::noise_context<_config>::cipher_state::get_encrypt_nonce() const {
     buffer_nonce_type buffer_nonce;
     std::size_t       ret;
     if ((ret = noise_cipherstate_get_nonce(
@@ -608,7 +626,7 @@ noise::noise_context<_config>::buffer_nonce_type
 }
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::buffer_nonce_type
-    noise::noise_context<_config>::cipher_state::get_decrypt_nonce() {
+    noise::noise_context<_config>::cipher_state::get_decrypt_nonce() const {
     buffer_nonce_type buffer_nonce;
     std::size_t       ret;
     if ((ret = noise_cipherstate_get_nonce(
@@ -617,6 +635,22 @@ noise::noise_context<_config>::buffer_nonce_type
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to get decrypt key.");
     return buffer_nonce;
+}
+template<noise::noise_context_config _config>
+std::uint64_t
+    noise::noise_context<_config>::cipher_state::get_encrypt_counter_block() const {
+    std::uint64_t  counter;
+    decltype(auto) nonce_tmp = this->get_encrypt_nonce();
+    std::memcpy(&counter, &nonce_tmp, sizeof(counter));
+    return counter;
+}
+template<noise::noise_context_config _config>
+std::uint64_t
+    noise::noise_context<_config>::cipher_state::get_decrypt_counter_block() const {
+    std::uint64_t  counter;
+    decltype(auto) nonce_tmp = this->get_decrypt_nonce();
+    std::memcpy(&counter, &nonce_tmp, sizeof(counter));
+    return counter;
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::check_encrypt_key() const {
