@@ -292,7 +292,7 @@ void essu::noise_handshake_context::stop() {
     generate_posthandshake_unique_values();
 
     noise_context.dump();
-    
+
     status = status_enum(static_cast<std::size_t>(status) + 1);
 }
 
@@ -337,7 +337,7 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
         xor_public_key_with_buffer(local_keypair.pub);
         xor_public_key_with_buffer(remote_public_key);
     }
-    // Mixes the public key with the previous unique value 
+    // Mixes the public key with the previous unique value
     xor_public_key_with_buffer(hash_state.get_hash(
         {unique_value_previous.data(), unique_value_previous.size()}));
 

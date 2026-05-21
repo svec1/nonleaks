@@ -45,9 +45,11 @@ enum class noise_action : std::uint16_t {
 };
 
 enum class ecdh_type : std::uint16_t {
-    UNKNOWN          = 0,
-    X25519           = NOISE_DH_CURVE25519,
-    X25519_KYBER1024 = NOISE_DH_CURVE25519 ^ NOISE_DH_KYBER1024,
+    UNKNOWN   = 0,
+    NONE      = NOISE_DH_NONE,
+    X25519    = NOISE_DH_CURVE25519,
+    MLKEM768  = NOISE_DH_MLKEM768,
+    MLKEM1024 = NOISE_DH_MLKEM1024,
 };
 
 enum class cipher_type : std::uint16_t {
@@ -91,34 +93,41 @@ inline std::string_view get_noise_role_string(noise_role role) {
     return "UNKNOWN";
 }
 
-template<noise_pattern pattern, ecdh_type ecdh>
+template<noise_pattern pattern, ecdh_type ecdh, ecdh_type hybrid_ecdh>
 consteval std::size_t pattern_ecdh_is_compatible() {
     if constexpr (((pattern == noise_pattern::XX || pattern == noise_pattern::XK)
                    && ecdh == ecdh_type::X25519)
                   || ((pattern == noise_pattern::XX_HFS
                        || pattern == noise_pattern::XK_HFS)
-                      && ecdh == ecdh_type::X25519_KYBER1024))
+                      && ecdh == ecdh_type::X25519
+                      && (hybrid_ecdh == ecdh_type::MLKEM768
+                          || hybrid_ecdh == ecdh_type::MLKEM1024)))
         return true;
     return false;
 }
 
 template<ecdh_type ecdh>
-consteval std::size_t get_dh_key_size() {
-    if constexpr (ecdh == ecdh_type::X25519 || ecdh == ecdh_type::X25519_KYBER1024)
+consteval std::size_t get_shared_secret_key_size() {
+    if constexpr (ecdh == ecdh_type::X25519 || ecdh == ecdh_type::MLKEM768
+                  || ecdh == ecdh_type::MLKEM1024)
         return 32;
     else
-        static_assert(false, "The passed ECDH type is not supported.");
+        return 0;
 }
 template<ecdh_type ecdh>
-consteval std::size_t get_kem_key_size() {
-    if constexpr (ecdh == ecdh_type::X25519_KYBER1024)
+consteval std::size_t get_kem_public_key_size() {
+    if constexpr (ecdh == ecdh_type::MLKEM768)
+        return 1184;
+    else if constexpr (ecdh == ecdh_type::MLKEM1024)
         return 1568;
     else
         return 0;
 }
 template<ecdh_type ecdh>
 consteval std::size_t get_kem_cipher_text_size() {
-    if constexpr (ecdh == ecdh_type::X25519_KYBER1024)
+    if (ecdh == ecdh_type::MLKEM768)
+        return 1088;
+    else if constexpr (ecdh == ecdh_type::MLKEM1024)
         return 1568;
     else
         return 0;
@@ -130,7 +139,7 @@ consteval std::size_t get_mac_size() {
                   || cipher == cipher_type::AESGCM)
         return 16;
     else
-        static_assert(false, "The passed cipher type is not supported.");
+        return 0;
 }
 template<cipher_type cipher>
 consteval std::size_t get_nonce_size() {
@@ -139,7 +148,7 @@ consteval std::size_t get_nonce_size() {
     else if constexpr (cipher == cipher_type::XCHACHAPOLY)
         return 24;
     else
-        static_assert(false, "The passed cipher type is not supported.");
+        return 0;
 }
 
 template<hash_type hash>
@@ -152,39 +161,42 @@ consteval std::size_t get_hash_size() {
         static_assert(false, "The passed hash type is not supported.");
 }
 
-template<noise_pattern _pattern, ecdh_type _ecdh, cipher_type _cipher, hash_type _hash>
+template<noise_pattern _pattern, ecdh_type _ecdh, ecdh_type _hybrid_ecdh,
+         cipher_type _cipher, hash_type _hash>
 struct noise_context_config {
-    static constexpr noise_pattern pattern = _pattern;
-    static constexpr ecdh_type     ecdh    = _ecdh;
-    static constexpr cipher_type   cipher  = _cipher;
-    static constexpr hash_type     hash    = _hash;
+    static constexpr noise_pattern pattern     = _pattern;
+    static constexpr ecdh_type     ecdh        = _ecdh;
+    static constexpr ecdh_type     hybrid_ecdh = _hybrid_ecdh;
+    static constexpr cipher_type   cipher      = _cipher;
+    static constexpr hash_type     hash        = _hash;
 
     static constexpr std::size_t mac_size   = get_mac_size<cipher>();
     static constexpr std::size_t nonce_size = get_nonce_size<cipher>();
 
     static consteval std::size_t get_hs1_size() {
         if constexpr (pattern == noise_pattern::XX)
-            return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XK)
-            return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XX_HFS
                            || pattern == noise_pattern::XK_HFS) {
-            return get_kem_key_size<ecdh>() + get_dh_key_size<ecdh>()
-                   + get_mac_size<cipher>() * 2;
+            return get_kem_public_key_size<hybrid_ecdh>()
+                   + get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>() * 2;
         } else
             static_assert(false, "Invalid noise context config.");
     }
     static consteval std::size_t get_hs2_size() {
         if constexpr (pattern == noise_pattern::XX)
-            return noise::get_dh_key_size<ecdh>() * 2 + get_mac_size<cipher>() * 2;
+            return get_shared_secret_key_size<ecdh>() * 2 + get_mac_size<cipher>() * 2;
         else if constexpr (pattern == noise_pattern::XK)
-            return get_dh_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XX_HFS)
-            return get_kem_cipher_text_size<ecdh>() + noise::get_dh_key_size<ecdh>() * 2
+            return get_kem_cipher_text_size<ecdh>()
+                   + noise::get_shared_secret_key_size<ecdh>() * 2
                    + get_mac_size<cipher>() * 2 + 16;
         else if constexpr (pattern == noise_pattern::XK_HFS)
-            return get_kem_cipher_text_size<ecdh>() + noise::get_dh_key_size<ecdh>()
-                   + get_mac_size<cipher>();
+            return get_kem_cipher_text_size<ecdh>()
+                   + noise::get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
         else
             static_assert(false, "Invalid noise context config.");
     }
@@ -192,13 +204,14 @@ struct noise_context_config {
         if constexpr (pattern == noise_pattern::XX || pattern == noise_pattern::XK
                       || pattern == noise_pattern::XX_HFS
                       || pattern == noise_pattern::XK_HFS)
-            return noise::get_dh_key_size<ecdh>() + get_mac_size<cipher>() * 2
+            return noise::get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>() * 2
                    + handshake_payload_size;
         else
             static_assert(false, "Invalid noise context config.");
     }
 
-    static_assert(noise::pattern_ecdh_is_compatible<pattern, ecdh>(),
+    static_assert(ecdh != ecdh_type::UNKNOWN, "Undefined ecdh type.");
+    static_assert(noise::pattern_ecdh_is_compatible<pattern, ecdh, hybrid_ecdh>(),
                   "Noise pattern and ecdh type is not compatible.");
 };
 
@@ -209,17 +222,15 @@ public:
     static constexpr NoiseProtocolId             nid_static{
                     .prefix_id  = NOISE_PREFIX_PSK,
                     .pattern_id = static_cast<std::uint16_t>(config.pattern),
-                    .dh_id      = static_cast<std::uint16_t>(
-            ecdh_type(static_cast<std::uint16_t>(config.ecdh) ^ NOISE_DH_KYBER1024)),
-                    .cipher_id = static_cast<std::uint16_t>(config.cipher),
-                    .hash_id   = static_cast<std::uint16_t>(config.hash),
-                    .hybrid_id = (config.ecdh == ecdh_type::X25519_KYBER1024) ? NOISE_DH_KYBER1024
-                                                                              : NOISE_DH_NONE,
-                    .reserved = {},
+                    .dh_id      = static_cast<std::uint16_t>(config.ecdh),
+                    .cipher_id  = static_cast<std::uint16_t>(config.cipher),
+                    .hash_id    = static_cast<std::uint16_t>(config.hash),
+                    .hybrid_id  = static_cast<std::uint16_t>(config.hybrid_ecdh),
+                    .reserved   = {},
     };
 
 public:
-    using buffer_key_type   = buffer_type<get_dh_key_size<config.ecdh>()>;
+    using buffer_key_type   = buffer_type<get_shared_secret_key_size<config.ecdh>()>;
     using buffer_nonce_type = buffer_type<get_nonce_size<config.cipher>()>;
 
 private:
@@ -277,7 +288,8 @@ public:
                 random_st.padding_buffer.set(
                     {reinterpret_cast<noheap::rbyte *>(&value), sizeof(value)}, 0);
                 random_st.pad();
-                return value;
+                random_st.reseed();
+				return value;
             }
 
             static constexpr std::size_t min() { return 0; }
@@ -451,11 +463,11 @@ void noise::noise_context<_config>::random_state::pad() {
     std::size_t ret;
     if ((ret = noise_randstate_pad(randstate, noise_buffer.data, noise_buffer.size,
                                    noise_buffer.max_size, NOISE_PADDING_RANDOM))
-        != NOISE_ERROR_NONE){
+        != NOISE_ERROR_NONE) {
         handle_error(ret, "Failed to pad.");
-	}
+    }
 
-	padding_buffer.set({}, 0);
+    padding_buffer.set({}, 0);
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::random_state::reseed() {

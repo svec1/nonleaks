@@ -25,7 +25,7 @@ constexpr std::size_t buffer_data_size               = unit_size - header_data_s
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;
 
 static constexpr noise::noise_context_config<
-    noise::noise_pattern::XX_HFS, noise::ecdh_type::X25519_KYBER1024,
+    noise::noise_pattern::XX_HFS, noise::ecdh_type::X25519, noise::ecdh_type::MLKEM768,
     noise::cipher_type::XCHACHAPOLY, noise::hash_type::SHA3512>
     noise_config;
 using noise_context_type = noise::noise_context<noise_config>;

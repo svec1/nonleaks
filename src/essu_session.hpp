@@ -131,7 +131,7 @@ void essu::session_handler::run() {
 					protocol::start_handshake(session_info);
 					session_info.log.to_all("Performing handshake...");
 				}
-                else if (session_status == session_info_type::status_enum::COMPLETE){
+                else if (session_status == session_info_type::status_enum::STOP){
 					protocol::stop_handshake(session_info);
                     session_info.log.to_all("Handshake completed.");
 				}
