@@ -4,27 +4,19 @@
 #include <boost/json.hpp>
 #include <boost/json/src.hpp>
 
-#include "stream_audio.hpp"
 #include "essu_session.hpp"
+#include "stream_audio.hpp"
 
 using namespace boost;
 
 struct config_type {
-    struct endpoint_meta_type {
-        noheap::buffer_chars_type<16> name;
-
-        network::ipv                              v;
-        network::buffer_address_type              address;
-        network::port_type                        port;
-        noise::noise_role                         role;
-        essu::noise_context_type::buffer_key_type rpubk;
-        essu::noise_context_type::buffer_key_type psk;
-    };
-
-    network::port_type                                                    listen_port;
-    bool                                                                  on_ipv6;
-    essu::noise_context_type::keypair_type                                keypair;
-    noheap::monotonic_array<endpoint_meta_type, essu::max_session_number> endpoint_meta_s;
+    network::port_type                 listen_port;
+    bool                               on_ipv6;
+    essu::session_handler::config_type local_config;
+    noheap::monotonic_array<std::pair<noheap::buffer_chars_type<16>,
+                                      essu::session_handler::endpoint_config_type>,
+                            essu::max_session_number>
+        endpoint_config_s;
 };
 
 struct json_config {
@@ -37,7 +29,6 @@ private:
     static constexpr std::string_view role_string        = "role";
     static constexpr std::string_view privk_string       = "privk";
     static constexpr std::string_view pubk_string        = "pubk";
-    static constexpr std::string_view rpubk_string       = "rpubk";
     static constexpr std::string_view psk_string         = "psk";
 
 public:
@@ -52,7 +43,8 @@ public:
 
 private:
     template<typename T>
-    inline T get_object_field(const json::object &value, const std::string_view field_string);
+    inline T get_object_field(const json::object    &value,
+                              const std::string_view field_string);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -101,12 +93,9 @@ void xxcore_service::run() {
             stream.close();
         });
 
-        // Tests
-        for (const auto &endpoint_meta : config.endpoint_meta_s)
-            stream.get_action().register_session(endpoint_meta.v, endpoint_meta.address,
-                                                 endpoint_meta.port, endpoint_meta.role,
-                                                 {}, config.keypair, endpoint_meta.rpubk,
-                                                 endpoint_meta.psk);
+        stream.get_action().set_config(std::move(config.local_config));
+        for (const auto &endpoint_config_pair : config.endpoint_config_s)
+            stream.get_action().register_session(endpoint_config_pair.second);
 
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
         stream.get_action().run();
@@ -150,10 +139,10 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
         get_object_field<std::uint16_t>(global_object, listen_port_string);
     config.on_ipv6 = get_object_field<bool>(global_object, on_ipv6_string);
     if (new_keypair) {
-        config.keypair = essu::noise_context_type::generate_keypair();
+        config.local_config.keypair = essu::noise_context_type::generate_keypair();
     } else {
-        get_bytes_key(global_object, privk_string, config.keypair.priv);
-        get_bytes_key(global_object, pubk_string, config.keypair.pub);
+        get_bytes_key(global_object, privk_string, config.local_config.keypair.priv);
+        get_bytes_key(global_object, pubk_string, config.local_config.keypair.pub);
     }
 
     for (const auto &global_field : global_object) {
@@ -163,34 +152,43 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
         if (!global_field_value.is_object())
             continue;
 
-        if (std::find_if(config.endpoint_meta_s.begin(), config.endpoint_meta_s.end(),
+        if (std::find_if(config.endpoint_config_s.begin(), config.endpoint_config_s.end(),
                          [global_field_key](const auto &el) {
-                             return !std::strcmp(el.name.data(), global_field_key.data());
+                             return !std::strcmp(el.first.data(),
+                                                 global_field_key.data());
                          })
-            != config.endpoint_meta_s.end())
+            != config.endpoint_config_s.end())
             throw noheap::runtime_error(buffer_owner, "Endpoint[{}] is already exist.",
                                         global_field_key.data());
 
-        config_type::endpoint_meta_type endpoint_meta{};
-        decltype(auto)                  object = global_field_value.as_object();
+        decltype(config_type::endpoint_config_s)::value_type::second_type
+            endpoint_config{};
+        decltype(config_type::endpoint_config_s)::value_type::first_type
+                       endpoint_config_name{};
+        decltype(auto) object = global_field_value.as_object();
 
         std::copy(global_field_key.begin(),
                   global_field_key.begin()
                       + std::clamp<std::size_t>(global_field_key.size(), 0,
-                                                endpoint_meta.name.size()),
-                  endpoint_meta.name.begin());
-        endpoint_meta.v = get_object_field<bool>(object, ipv6_string) ? network::ipv::v6
-                                                                      : network::ipv::v4;
-        endpoint_meta.address = network::utils::string_address_to_bytes(
-            get_object_field<std::string_view>(object, address_string), endpoint_meta.v);
-        endpoint_meta.port = get_object_field<network::port_type>(object, port_string);
-        endpoint_meta.role = noise::get_noise_role(
+                                                endpoint_config_name.size()),
+                  endpoint_config_name.begin());
+        endpoint_config.endpoint.v       = get_object_field<bool>(object, ipv6_string)
+                                               ? network::ipv::v6
+                                               : network::ipv::v4;
+        endpoint_config.endpoint.address = network::utils::string_address_to_bytes(
+            get_object_field<std::string_view>(object, address_string),
+            endpoint_config.endpoint.v);
+        endpoint_config.endpoint.port =
+            get_object_field<network::port_type>(object, port_string);
+        endpoint_config.local_role = noise::get_noise_role(
             get_object_field<std::string_view>(object, role_string));
 
-        get_bytes_key(object, rpubk_string, endpoint_meta.rpubk);
-        get_bytes_key(object, psk_string, endpoint_meta.psk, false);
+        get_bytes_key(object, pubk_string, endpoint_config.public_key);
+        get_bytes_key(object, psk_string, endpoint_config.pre_shared_key, false);
 
-        config.endpoint_meta_s.push_back(endpoint_meta);
+        config.endpoint_config_s.push_back(
+            decltype(config_type::endpoint_config_s)::value_type{endpoint_config_name,
+                                                                 endpoint_config});
     }
 }
 void json_config::get_buffer_config(buffer_config_type &buffer) {
@@ -206,32 +204,37 @@ void json_config::get_buffer_config(buffer_config_type &buffer) {
 
     global_object.emplace(listen_port_string, config.listen_port);
     global_object.emplace(on_ipv6_string, config.on_ipv6);
-    global_object.emplace(privk_string,
-                          std::string_view(noheap::hex_encode(config.keypair.priv)));
-    global_object.emplace(pubk_string,
-                          std::string_view(noheap::hex_encode(config.keypair.pub)));
+    global_object.emplace(privk_string, std::string_view(noheap::hex_encode(
+                                            config.local_config.keypair.priv)));
+    global_object.emplace(pubk_string, std::string_view(noheap::hex_encode(
+                                           config.local_config.keypair.pub)));
 
-    for (const auto &endpoint_meta : config.endpoint_meta_s) {
+    for (const auto &endpoint_config_pair : config.endpoint_config_s) {
+        decltype(auto) endpoint_config_name = endpoint_config_pair.first;
+        decltype(auto) endpoint_config      = endpoint_config_pair.second;
+
         global_object.emplace(
-            std::string_view(endpoint_meta.name.data()),
+            std::string_view(endpoint_config_name.data()),
             json::object{
-                {ipv6_string, endpoint_meta.v == network::ipv::v6},
-                {address_string,
-                 std::string_view(network::utils::bytes_address_to_string(
-                                      endpoint_meta.address, endpoint_meta.v)
-                                      .data())},
-                {port_string, endpoint_meta.port},
-                {role_string, noise::get_noise_role_string(endpoint_meta.role)},
+                {ipv6_string, endpoint_config.endpoint.v == network::ipv::v6},
+                {address_string, std::string_view(network::utils::bytes_address_to_string(
+                                                      endpoint_config.endpoint.address,
+                                                      endpoint_config.endpoint.v)
+                                                      .data())},
+                {port_string, endpoint_config.endpoint.port},
+                {role_string, noise::get_noise_role_string(endpoint_config.local_role)},
 
-                {rpubk_string,
-                 endpoint_meta.rpubk != std::decay_t<decltype(endpoint_meta.rpubk)>{}
-                     ? std::string_view(noheap::hex_encode(endpoint_meta.rpubk))
+                {pubk_string,
+                 endpoint_config.public_key
+                         != std::decay_t<decltype(endpoint_config.public_key)>{}
+                     ? std::string_view(noheap::hex_encode(endpoint_config.public_key))
                      : ""},
                 {psk_string,
-                 std::string_view(noheap::to_buffer<const noheap::buffer_chars_type<
-                                      noheap::buffer_size<decltype(endpoint_meta.psk)>>>(
-                                      endpoint_meta.psk)
-                                      .data())}});
+                 std::string_view(
+                     noheap::to_buffer<const noheap::buffer_chars_type<
+                         noheap::buffer_size<decltype(endpoint_config.pre_shared_key)>>>(
+                         endpoint_config.pre_shared_key)
+                         .data())}});
     }
 
     data.emplace_object() = global_object;

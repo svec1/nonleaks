@@ -23,7 +23,7 @@ class session_handler : public network::action<packet_type> {
             const noise_context_type::buffer_key_type &_remote_public_key,
             const noise::buffer_pre_shared_key_type   &_pre_shared_key,
             const noise_context_type::keypair_type    &_local_keypair)
-            : session_info_type(log, _v, _remote_address, _remote_port, _role, _ext,
+            : session_info_type(_v, _remote_address, _remote_port, _role, _ext,
                                 _remote_public_key, _pre_shared_key, _local_keypair),
               string_remote_address(network::utils::bytes_address_to_string(
                   remote_endpoint.address, remote_endpoint.v)),
@@ -40,25 +40,19 @@ class session_handler : public network::action<packet_type> {
     public:
         const log_proxy log;
     };
+
     using session_s_type =
         noheap::monotonic_placement_new_array<session_info_type_extended,
                                               max_session_number>;
 
 public:
-    struct config_type {
-        noise::buffer_prologue_extention_type ext;
-        noise_context_type::keypair_type      keypair;
-    };
-    struct endpoint_config_type {
-        network::native_endpoint            endpoint;
-        noise::noise_role                   local_role;
-        noise_context_type::buffer_key_type public_key;
-        noise::buffer_pre_shared_key_type   pre_shared_key;
-    };
-
-public:
-    inline void set_config(config_type &&_config);
-    inline void register_session(const endpoint_config_type &endpoint_config);
+    inline void
+        register_session(network::ipv v, network::buffer_address_type remote_address,
+                         network::port_type remote_port, noise::noise_role role,
+                         noise::buffer_prologue_extention_type      ext,
+                         const noise_context_type::keypair_type    &local_keypair,
+                         const noise_context_type::buffer_key_type &remote_public_key,
+                         const noise::buffer_pre_shared_key_type   &pre_shared_key);
     inline void set_running(bool value);
     inline bool get_running();
     inline void run();
@@ -83,31 +77,30 @@ private:
     static constexpr log_handler log{buffer_owner};
 
 private:
-    config_type config{};
-
     std::mutex                                                m_run;
     std::condition_variable                                   cv_run;
     std::condition_variable                                   cv_io;
     session_s_type                                            session_s;
+    noheap::runtime_error                                     excp;
     noheap::monotonic_array<packet_type, buffer_packets_size> send_buffer;
     noheap::monotonic_array<packet_type, buffer_packets_size> receive_buffer;
     bool                                                      running = true;
+    bool                                                      failed  = false;
 };
 
 } // namespace essu
 
-inline void essu::session_handler::set_config(config_type &&_config) {
-    config  = std::move(_config);
-    _config = {};
-}
 void essu::session_handler::register_session(
-    const endpoint_config_type &endpoint_config) {
+    network::ipv v, network::buffer_address_type remote_address,
+    network::port_type remote_port, noise::noise_role role,
+    noise::buffer_prologue_extention_type      ext,
+    const noise_context_type::keypair_type    &local_keypair,
+    const noise_context_type::buffer_key_type &remote_public_key,
+    const noise::buffer_pre_shared_key_type   &pre_shared_key) {
     std::lock_guard<std::mutex> m_run_lock(m_run);
 
-    session_s.emplace_back(
-        log, endpoint_config.endpoint.v, endpoint_config.endpoint.address,
-        endpoint_config.endpoint.port, endpoint_config.local_role, config.ext,
-        endpoint_config.public_key, endpoint_config.pre_shared_key, config.keypair);
+    session_s.emplace_back(log, v, remote_address, remote_port, role, ext,
+                           remote_public_key, pre_shared_key, local_keypair);
 
     session_s[session_s.size() - 1].log.to_all("Session registered.");
 }
@@ -120,15 +113,13 @@ bool essu::session_handler::get_running() {
     return running;
 }
 void essu::session_handler::run() {
-    log.to_all("Running...");
-
-    // Locks run_m and performs loop
-    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
-    while (running) {
-        scope_guard sc([this] { this->cv_io.notify_all(); });
-        std::size_t now_ms = get_now_ms();
-        for (decltype(auto) session_info : session_s) {
-            try {
+    try {
+        // Locks run_m and waits for notify cv_run 
+        std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+        while (running) {
+            scope_guard sc([this] { this->cv_io.notify_all(); });
+            std::size_t now_ms = get_now_ms();
+            for (decltype(auto) session_info : session_s) {
                 if (now_ms - session_info.last_received_ms >= timeout_ms)
                     session_info.log.throw_exception("Timeout has been reached.");
 
@@ -153,16 +144,16 @@ void essu::session_handler::run() {
                 // For testing
                 if (receive_buffer.size())
                     receive_buffer.pop_front();
-            } catch (const noheap::runtime_error &_excp) {
-                m_run_lock.unlock();
-                set_error(_excp, session_info.remote_endpoint.address);
-                m_run_lock.lock();
             }
+            
+			cv_run.wait_for(m_run_lock, std::chrono::milliseconds(run_thread_wake_up_ms));
         }
-
-        // Wait for notify
-        cv_run.wait_for(m_run_lock, std::chrono::milliseconds(run_thread_wake_up_ms));
+    } catch (const noheap::runtime_error &_excp) {
+        set_error(_excp, {});
     }
+
+    if (failed)
+        throw excp;
 }
 bool essu::session_handler::init_packet(packet_type &pckt) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
@@ -183,38 +174,25 @@ bool essu::session_handler::init_packet(packet_type &pckt) {
         protocol::prepare(pckt, session_info);
 
         // For testing: will delete
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
     return true;
 }
 void essu::session_handler::handle_packet(packet_type &&pckt) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
-    decltype(auto)                    remote_endpoint = pckt.get_endpoint();
 
-    // Registers new session if session_s does not contain it
-    if (!contain_session(remote_endpoint.address)) {
-        m_run_lock.unlock();
-        register_session(
-            {{remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
-             noise::noise_role::RESPONDER,
-             {},
-             {}});
-        m_run_lock.lock();
-        cv_run.notify_one();
-        cv_io.wait(m_run_lock);
-    } else
-        // Waits when session can receive packet
-        cv_io.wait(m_run_lock, [this] {
-            return !this->running || receive_buffer.size() < buffer_packets_size;
-        });
+    // Waits when session can receive packet
+    cv_io.wait(m_run_lock, [this] {
+        return !this->running || receive_buffer.size() < buffer_packets_size;
+    });
 
     if (!running)
         return;
 
     {
-        decltype(auto) session_info       = at_session(remote_endpoint.address);
-        session_info.remote_endpoint.port = remote_endpoint.port;
+        decltype(auto) session_info       = at_session(pckt.get_endpoint().address);
+        session_info.remote_endpoint.port = pckt.get_endpoint().port;
         session_info.last_received_ms     = get_now_ms();
 
         protocol::handle(pckt, session_info);
@@ -227,22 +205,22 @@ void essu::session_handler::handle_packet(packet_type &&pckt) {
 }
 
 void essu::session_handler::set_error(
-    const noheap::runtime_error &excp,
+    const noheap::runtime_error &_excp,
     network::buffer_address_type remote_endpoint_address) {
     std::lock_guard<std::mutex> m_run_lock(m_run);
 
-    // Erases session from list of sessions
+    // Derives new exception based on session
     if (contain_session(remote_endpoint_address)) {
-        session_s.erase(std::find_if(
-            session_s.begin(), session_s.end(),
-            [&remote_endpoint_address](const auto &session_info) {
-                return session_info.remote_endpoint.address == remote_endpoint_address;
-            }));
-    }
+        try {
+            at_session(remote_endpoint_address).log.throw_exception("{}", _excp.what());
+        } catch (const noheap::runtime_error &__excp) {
+            excp = __excp;
+        }
+    } else
+        excp = _excp;
 
-    // Logs error
-    log.to_all("{}", excp.what());
-
+    running = false;
+    failed  = true;
     cv_run.notify_one();
 }
 
