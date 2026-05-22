@@ -125,7 +125,7 @@ consteval std::size_t get_kem_public_key_size() {
 }
 template<ecdh_type ecdh>
 consteval std::size_t get_kem_cipher_text_size() {
-    if (ecdh == ecdh_type::MLKEM768)
+    if constexpr(ecdh == ecdh_type::MLKEM768)
         return 1088;
     else if constexpr (ecdh == ecdh_type::MLKEM1024)
         return 1568;
@@ -191,11 +191,11 @@ struct noise_context_config {
         else if constexpr (pattern == noise_pattern::XK)
             return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XX_HFS)
-            return get_kem_cipher_text_size<ecdh>()
+            return get_kem_cipher_text_size<hybrid_ecdh>()
                    + noise::get_shared_secret_key_size<ecdh>() * 2
                    + get_mac_size<cipher>() * 2 + 16;
         else if constexpr (pattern == noise_pattern::XK_HFS)
-            return get_kem_cipher_text_size<ecdh>()
+            return get_kem_cipher_text_size<hybrid_ecdh>()
                    + noise::get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
         else
             static_assert(false, "Invalid noise context config.");

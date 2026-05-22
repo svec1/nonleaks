@@ -114,9 +114,9 @@ bool essu::session_handler::get_running() {
 }
 void essu::session_handler::run() {
     try {
-        while (true) {
-            // Locks run_m and wait cv_run notify
-            std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+        // Locks run_m and waits for notify cv_run 
+        std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+        while (running) {
             cv_run.wait_for(m_run_lock, std::chrono::milliseconds(run_thread_wake_up_ms));
 
             scope_guard sc([this] { this->cv_io.notify_all(); });
@@ -127,17 +127,16 @@ void essu::session_handler::run() {
 
                 // If status of session is START or STOP:
                 decltype(auto) session_status = protocol::update_status(session_info);
-                if (session_status == session_info_type::status_enum::START){
-					protocol::start_handshake(session_info);
-					session_info.log.to_all("Performing handshake...");
-				}
-                else if (session_status == session_info_type::status_enum::STOP){
-					protocol::stop_handshake(session_info);
+                if (session_status == session_info_type::status_enum::START) {
+                    protocol::start_handshake(session_info);
+                    session_info.log.to_all("Performing handshake...");
+                } else if (session_status == session_info_type::status_enum::STOP) {
+                    protocol::stop_handshake(session_info);
                     session_info.log.to_all("Handshake completed.");
-				}
+                }
 
                 // Dummy trafic
-                if (send_buffer.size() == 0) {
+                if (send_buffer.size() == 0 && protocol::can_send_packet(session_info)) {
                     packet_type pckt;
                     pckt.set_endpoint(session_info.remote_endpoint);
                     set_dummy_packet(pckt);
@@ -148,9 +147,6 @@ void essu::session_handler::run() {
                 if (receive_buffer.size())
                     receive_buffer.pop_front();
             }
-
-            if (!running)
-                break;
         }
     } catch (const noheap::runtime_error &_excp) {
         set_error(_excp, {});

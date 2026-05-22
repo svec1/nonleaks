@@ -30,6 +30,7 @@ public:
     inline void handle_packet(packet_type &&pckt);
 
     inline bool                                       is_complete() const;
+    inline noise::noise_role                          get_role() const;
     inline noise::noise_action                        get_action() const;
     inline std::uint16_t                              get_available_batch_number() const;
     inline std::uint64_t                              get_handshake_id() const;
@@ -232,6 +233,9 @@ typename essu::noise_context_type::random_state &
 }
 bool essu::noise_handshake_context::is_complete() const {
     return status == status_enum::COMPLETE;
+}
+noise::noise_role essu::noise_handshake_context::get_role() const {
+    return noise_context.get_role();
 }
 noise::noise_action essu::noise_handshake_context::get_action() const {
     return fragmentation ? noise::noise_action::WRITE_MESSAGE
