@@ -205,7 +205,7 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
         session_info.handshake_context.get_header_cipher_state_receiver();
     bool session_handshake_complete = session_info.handshake_context.is_complete();
 
-    if (session_handshake_complete && !session_info.was_received_retry)
+    if (session_handshake_complete && session_info.was_received_retry)
         log.throw_exception("Expected to rehandshake.");
 
     // Selects possible unit number
