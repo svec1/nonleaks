@@ -5,9 +5,8 @@
 
 #include "essu_protocol.hpp"
 
-using namespace boost;
-
 namespace essu {
+using namespace boost;
 
 class session_handler : public network::action<packet_type> {
     static constexpr std::size_t run_thread_wake_up_ms = 1000;

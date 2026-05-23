@@ -208,7 +208,7 @@ public:
             auto end_it = std::format_to_n(buffer.begin(), buffer_size, format,
                                            std::forward<Args>(args)...);
             *end_it.out = '\0';
-		}
+        }
     }
     template<typename... Args>
     runtime_error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
@@ -375,9 +375,7 @@ public:
         ++count_pushed;
     }
     iterator erase(iterator it) {
-        if (count_pushed == this->buffer_size())
-            throw runtime_error("Buffer overflow.");
-        else if (it >= this->buffer.end())
+        if (!count_pushed || it >= this->buffer.end())
             throw runtime_error("Invalid access.");
 
         for (auto it_tmp = it; it_tmp < this->end(); ++it_tmp)
@@ -527,7 +525,7 @@ public:
     void emplace(iterator it, Args &&...args) {
         if (count_pushed == buffer_size())
             throw runtime_error("Buffer overflow.");
-        if (size() && it >= end())
+        if (size() && it > end())
             throw runtime_error("Invalid access.");
 
         this->template malloc<rbyte *>(sizeof(T));
@@ -561,11 +559,11 @@ public:
     }
     template<typename... Args>
     void emplace_back(Args &&...args) {
-        emplace(size() ? end() - 1 : begin(), std::forward<Args>(args)...);
+        emplace(size() ? end() : begin(), std::forward<Args>(args)...);
     }
 
     void erase(iterator it) {
-        if (it == end())
+        if (!count_pushed || it == end())
             throw runtime_error("Invalid access.");
 
         it->~T();
@@ -600,7 +598,7 @@ public:
 
     template<typename _T>
     decltype(auto) operator[](this _T &&_this, std::size_t it) {
-        return *(_this.template data<T *>() + sizeof(T) * it);
+        return *(_this.template data<T *>() + it);
     }
 
 private:
@@ -654,7 +652,7 @@ public:
                 T el_tmp;
 
                 sequence_number_type current_sequence_number =
-                    std::get<sequence_number_index>(*this->end());
+                    std::get<sequence_number_index>(*(this->end() - 1));
                 count_lost_elements += diff - 1;
                 for (; diff > 1; --diff) {
                     ++current_sequence_number;
@@ -821,7 +819,8 @@ private:
 class log_proxy {
 public:
     constexpr log_proxy(const log_handler &_log) : log(_log) {}
-    constexpr log_proxy(const log_handler &_log, noheap::log_impl::owner_impl::buffer_type _dynamic_owner)
+    constexpr log_proxy(const log_handler                        &_log,
+                        noheap::log_impl::owner_impl::buffer_type _dynamic_owner)
         : log(_log), dynamic_owner(_dynamic_owner) {}
 
 public:
@@ -842,7 +841,6 @@ public:
                                   std::forward<Args>(args)...)
                      .out;
 
-
         log.to_all("<{}> {}", dynamic_owner.data(), buffer.data());
     }
 
@@ -860,8 +858,8 @@ public:
     }
 
 private:
-    const log_handler &log;
-	noheap::log_impl::owner_impl::buffer_type dynamic_owner{};
+    const log_handler                        &log;
+    noheap::log_impl::owner_impl::buffer_type dynamic_owner{};
 };
 
 template<typename TReturn>

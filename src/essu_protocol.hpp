@@ -91,11 +91,6 @@ private:
                                                  packet_type             &pckt);
     static inline noise::buffer_type<header_data_size> derive_header_obfs_key(
         typename noise_context_type::cipher_state &header_cipher_state);
-
-private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("ESSU_PROTOCOL");
-    static constexpr log_handler log{buffer_owner};
 };
 
 } // namespace essu

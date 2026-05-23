@@ -1,3 +1,6 @@
+#ifndef ESSU_NOISE_HANDSHAKE_CONTEXT_HPP
+#define ESSU_NOISE_HANDSHAKE_CONTEXT_HPP
+
 #include "essu_base.hpp"
 
 namespace essu {
@@ -23,7 +26,6 @@ public:
         const noise_context_type::buffer_key_type &_remote_public_key,
         const noise::buffer_pre_shared_key_type   &_pre_shared_key,
         const noise_context_type::keypair_type    &_local_keypair);
-    inline noise_handshake_context(noise_handshake_context &&other);
 
 public:
     inline void init_packet(packet_type &pckt);
@@ -83,10 +85,7 @@ private:
 };
 
 } // namespace essu
-essu::noise_handshake_context::noise_handshake_context(noise_handshake_context &&other)
-    : noise_handshake_context(other.role, other.ext, other.remote_public_key,
-                              other.pre_shared_key, other.local_keypair) {
-}
+
 essu::noise_handshake_context::noise_handshake_context(
     noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
     const noise_context_type::buffer_key_type &_remote_public_key,
@@ -191,7 +190,7 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
     offset_noise_handshake_unit += control_unit.buffer.size();
 
     // If fragmentation
-    if (payload_size >= offset_noise_handshake_unit)
+    if (payload_size > offset_noise_handshake_unit)
         return;
 
     if (status == status_enum::HS1)
@@ -462,3 +461,5 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
         }
     }
 }
+
+#endif

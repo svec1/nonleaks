@@ -88,7 +88,8 @@ inline decltype(auto) get_control_unit(T &&pckt) {
 inline bool is_control_session_unit_type(unit_type::unit_type_enum type) {
     return type == unit_type::unit_type_enum::session_request
            || type == unit_type::unit_type_enum::session_created
-           || type == unit_type::unit_type_enum::session_confirmed;
+           || type == unit_type::unit_type_enum::session_confirmed
+           || type == unit_type::unit_type_enum::retry;
 }
 inline bool is_control_payload_packet_type(const packet_type &pckt) {
     return get_control_unit(pckt).header.type == unit_type::unit_type_enum::data;

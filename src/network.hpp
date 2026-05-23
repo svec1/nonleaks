@@ -313,16 +313,19 @@ void udp_stream<Action>::register_async_receive(ipv v) {
         return;
 
     const auto handler = [this, v](system::error_code ec, std::size_t) {
-        decltype(auto) pckt = v == ipv::v4 ? this->receive_pckt_v4 : this->receive_pckt_v6;
+        decltype(auto) pckt =
+            v == ipv::v4 ? this->receive_pckt_v4 : this->receive_pckt_v6;
+        decltype(auto) receive_endpoint =
+            v == ipv::v4 ? this->receive_endpoint_v4 : this->receive_endpoint_v6;
         try {
             handle_error(ec);
 
             // Handles the packet TWrapper_packet protocol
             {
                 std::lock_guard<std::mutex> m_lock(this->m);
-                pckt.set_endpoint(
-                    {v, utils::get_address_bytes(this->receive_endpoint_v4.address()),
-                     this->receive_endpoint_v4.port()});
+                pckt.set_endpoint({v,
+                                   utils::get_address_bytes(receive_endpoint.address()),
+                                   receive_endpoint.port()});
                 this->act.handle_packet(std::move(pckt));
                 pckt = {};
             }
@@ -377,7 +380,7 @@ buffer_string_address_type utils::bytes_address_to_string(buffer_address_type ad
                                   *reinterpret_cast<std::uint16_t *>(address.begin() + i))
                      .out;
             if (i != address.size() - 1)
-                std::format_to_n(it, buffer_tmp.size(), ":");
+                it = std::format_to_n(it, buffer_tmp.size(), ":").out;
         }
     }
     return buffer_tmp;
@@ -393,7 +396,7 @@ buffer_address_type utils::string_address_to_bytes(std::string_view address, ipv
                    || pos < address.size()) {
                 if (pos_curr == address.npos && pos < address.size()) {
                     if (i != 3)
-                        throw std::exception{};
+                        throw noheap::runtime_error();
                     pos_curr = address.size() - 1;
                 }
 
@@ -401,15 +404,16 @@ buffer_address_type utils::string_address_to_bytes(std::string_view address, ipv
                 buffer_tmp[i++]      = std::stoll(ip_block_string.data(), nullptr);
                 pos                  = pos_curr + 1;
             }
+
             if (i != 4)
-                throw std::exception{};
+                throw noheap::runtime_error();
         } else {
             std::size_t i = 0, pos = 0, pos_curr;
             while ((pos_curr = address.find_first_of(":", pos)) != address.npos
                    || pos < address.size()) {
                 if (pos_curr == address.npos && pos < address.size()) {
                     if (i != 7)
-                        throw std::exception{};
+                        throw noheap::runtime_error();
                     pos_curr = address.size() - 1;
                 }
 
@@ -426,7 +430,7 @@ buffer_address_type utils::string_address_to_bytes(std::string_view address, ipv
                 i += 2;
             }
             if (i != 8)
-                throw std::exception{};
+                throw noheap::runtime_error();
         }
 
         return buffer_tmp;

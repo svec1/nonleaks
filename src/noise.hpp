@@ -63,7 +63,7 @@ enum class hash_type : std::uint16_t {
     UNKNOWN = 0,
     SHA256  = NOISE_HASH_SHA256,
     SHA512  = NOISE_HASH_SHA512,
-    SHA3256 = NOISE_HASH_SHA512,
+    SHA3256 = NOISE_HASH_SHA3256,
     SHA3512 = NOISE_HASH_SHA3512,
 };
 
@@ -581,14 +581,14 @@ void noise::noise_context<_config>::cipher_state::set_decrypt_nonce(
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_encrypt_counter_block(
     std::uint64_t counter) {
-    decltype(auto) nonce_tmp = this->get_encrypt_nonce();
+	decltype(auto) nonce_tmp = this->get_encrypt_nonce();
     std::memcpy(&nonce_tmp, &counter, sizeof(counter));
     this->set_encrypt_nonce(nonce_tmp);
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_decrypt_counter_block(
     std::uint64_t counter) {
-    decltype(auto) nonce_tmp = this->get_decrypt_nonce();
+	decltype(auto) nonce_tmp = this->get_decrypt_nonce();
     std::memcpy(&nonce_tmp, &counter, sizeof(counter));
     this->set_decrypt_nonce(nonce_tmp);
 }
