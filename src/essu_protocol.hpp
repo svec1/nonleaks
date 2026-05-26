@@ -79,7 +79,7 @@ public:
         update_status(session_info_type &session_info);
 
     static inline bool check_affiliation_packet(session_info_type &session_info,
-                                                packet_type       &pckt);
+                                                const packet_type &pckt);
 
     static inline std::uint64_t
         get_handshake_number(const session_info_type &session_info);
@@ -203,7 +203,8 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         std::transform(
             reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(std::uint64_t),
             reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
-            obfs_key_tmp.data(), reinterpret_cast<noheap::rbyte *>(&unit.header),
+            obfs_key_tmp.data(),
+            reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(std::uint64_t),
             std::bit_xor{});
     }
 
@@ -250,7 +251,8 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
                            reinterpret_cast<noheap::rbyte *>(&test_unit.header)
                                + sizeof(test_unit.header),
                            obfs_key_tmp.data(),
-                           reinterpret_cast<noheap::rbyte *>(&test_unit.header),
+                           reinterpret_cast<noheap::rbyte *>(&test_unit.header)
+                               + sizeof(std::uint64_t),
                            std::bit_xor{});
 
             if (test_unit.header.shared_value != possible_shared_value
@@ -362,7 +364,7 @@ essu::session_info_type::status_enum
     return session_info.status;
 }
 bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
-                                              packet_type       &pckt) {
+                                              const packet_type &pckt) {
     decltype(auto) header_cipher_state =
         session_info.handshake_context.get_header_cipher_state_receiver();
 
@@ -428,7 +430,7 @@ void essu::protocol::check_packet_compliance(const session_info_type &session_in
         if (!is_posthandshake_packet(pckt))
             session_info.log.throw_exception<protocol_error>(
                 "Invalid packet setting after handshake.");
-    } else if (!is_dummy_packet_type(pckt))
+    } else if (!is_handshake_packet(pckt) && !is_dummy_packet(pckt))
         session_info.log.throw_exception<protocol_error>(
             "Invalid packet setting for handshake.");
 }

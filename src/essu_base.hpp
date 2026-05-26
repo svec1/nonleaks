@@ -117,11 +117,17 @@ inline bool is_control_payload_packet_type(const packet_type &pckt) {
 inline bool is_control_session_packet_type(const packet_type &pckt) {
     return is_control_session_unit_type(get_control_unit(pckt).header.type);
 }
-inline bool is_dummy_packet_type(const packet_type &pckt) {
+inline bool is_dummy_packet(const packet_type &pckt) {
     return (pckt->units[0].header.type == pckt->units[1].header.type
             && pckt->units[1].header.type == pckt->units[2].header.type
             && pckt->units[2].header.type == pckt->units[3].header.type
             && pckt->units[3].header.type == unit_type::unit_type_enum::dummy);
+}
+inline bool is_handshake_packet(const packet_type &pckt) {
+    return is_control_session_packet_type(pckt)
+           && pckt->units[0].header.type == unit_type::unit_type_enum::dummy
+           && pckt->units[1].header.type == unit_type::unit_type_enum::dummy
+           && pckt->units[3].header.type == unit_type::unit_type_enum::dummy;
 }
 inline bool is_posthandshake_packet(const packet_type &pckt) {
     return get_control_unit(pckt).header.type == unit_type::unit_type_enum::dummy
