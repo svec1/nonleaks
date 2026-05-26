@@ -3,4 +3,7 @@
     url = https://github.com/xiph/opus.git
 [submodule "thirdparty/cnoise"]
 	path = thirdparty/cnoise
-    url = https://github.com/svec1/cnoise.git
+	url = https://github.com/svec1/cnoise.git
+[submodule "thirdparty/mldsa-native"]
+	path = thirdparty/mldsa-native
+	url = https://github.com/pq-code-package/mldsa-native.git

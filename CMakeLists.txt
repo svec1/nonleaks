@@ -1,14 +1,14 @@
-cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
+cmake_minimum_required(VERSION 4.2 FATAL_ERROR)
 
 option(XXCORE_SNDIO "Use sndio audio interface." OFF)
-option(XXCORE_NONALLOWED_AUDIO "Do not use audio class." OFF)
-
-set(XXCORE xxcore)
+option(XXCORE_NOTUSE_AUDIO "Do not use audio class." OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_COMPILER clang++)
+set(CMAKE_C_COMPILER clang)
 
+set(XXCORE xxcore)
 file(GLOB_RECURSE SRC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 project(${XXCORE})
@@ -27,6 +27,11 @@ set(CNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cnoise)
 set(CNOISE_TESTS OFF)
 add_subdirectory(${CNOISE_DIR})	
 
+# Builds MLDSA_NATIVE lib
+set(MLDSA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cmake/mldsa-native.cmake)
+include(${MLDSA_DIR})
+message(STATUS "Use MLDSA-${MLDSA_NATIVE_TYPE} type.")
+
 add_executable(${XXCORE} ${SRC_FILES})
 target_compile_options(${XXCORE} PRIVATE -Wall -Wextra -Wpedantic -pthread -O1)
 target_link_options(${XXCORE} PRIVATE -rdynamic)
@@ -37,15 +42,18 @@ target_include_directories(
     ${BOOST_INCLUDE_DIR}
     ${OPUS_INCLUDE_DIR}
     ${CNOISE_INCLUDE_DIR}
+	${MLDSA_NATIVE_INCLUDE_DIR}
 )
 target_link_libraries(
     ${XXCORE}
     PRIVATE
     Opus::opus
     cnoise
+	mldsa_native
 )
 
-if(NOT ${XXCORE_NONALLOWED_AUDIO})
+set(XXCORE_AUDIO_SYSTEM "UNDEFINED")    
+if(NOT ${XXCORE_NOTUSE_AUDIO})
     if(${XXCORE_SNDIO} AND (LINUX OR BSD))
 	    find_library(LIBSNDIO NAMES sndio)
         if("${LIBSNDIO}" STREQUAL "LIBSNDIO-NOTFOUND")	
@@ -74,8 +82,8 @@ if(NOT ${XXCORE_NONALLOWED_AUDIO})
 		    target_compile_options(${XXCORE} PRIVATE "-DNETBSD_AUDIO")
 	    endif()
     endif()
-else()
-    set(XXCORE_AUDIO_SYSTEM "NONALLOWED")    
 endif()
 	
 message(STATUS "Using audio system ${XXCORE_AUDIO_SYSTEM}")
+
+file(COPY xxcore.json DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

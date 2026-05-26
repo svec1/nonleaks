@@ -73,11 +73,13 @@ public:
     }
 
 public:
-    extention_data_type       *operator->() noexcept { return _extention_data_p; }
-    const extention_data_type *operator->() const noexcept { return _extention_data_p; }
+    template<typename _T>
+    decltype(auto) operator->(this _T &&_this) noexcept {
+        return &_this._extention_data;
+    }
 
-    void set_endpoint(const native_endpoint &_endpoint) { endpoint = _endpoint; }
-    const native_endpoint &get_endpoint() const { return endpoint; }
+    void set_endpoint(const native_endpoint &_endpoint) noexcept { endpoint = _endpoint; }
+    const native_endpoint &get_endpoint() const noexcept { return endpoint; }
 
 public:
     static constexpr std::size_t size() noexcept { return sizeof(extention_data_type); }
@@ -92,9 +94,8 @@ public:
     }
 
 private:
-    extention_data_type        _extention_data;
-    extention_data_type *const _extention_data_p = &_extention_data;
-    native_endpoint            endpoint;
+    extention_data_type _extention_data;
+    native_endpoint     endpoint;
 };
 
 template<Packet_native_t TPacket>
@@ -103,29 +104,15 @@ public:
     using packet_type = TPacket;
 
 public:
-    bool init_packet(packet_type &pckt);
+    void init_packet(packet_type &pckt);
     void handle_packet(packet_type &&pckt);
     void set_error(const noheap::runtime_error &_excp);
+    bool is_running();
 };
 
-template<Packet_native_t T, noheap::log_impl::owner_impl::buffer_type _buffer_owner>
-struct protocol_native_type {
-public:
-    using packet_type = T;
-    using action_type = action<packet_type>;
-
-public:
-    template<typename TFunc_callback>
-    void prepare(packet_type &, TFunc_callback &&) const;
-    template<typename TFunc_callback>
-    void handle(packet_type &&, TFunc_callback &&) const;
-
-public:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        _buffer_owner;
-
+class network_error : public noheap::runtime_error {
 protected:
-    static constexpr log_handler log{buffer_owner};
+    using runtime_error::runtime_error;
 };
 
 template<Derived_from_action Action>
@@ -232,7 +219,7 @@ void udp_stream<Action>::open(ipv _v) {
 
         std::lock_guard<std::mutex> m_lock(m);
         if (running)
-            log.throw_exception("Failed to open udp stream.");
+            log.throw_exception<network_error>("Failed to open udp stream.");
 
         v       = _v;
         running = true;
@@ -253,7 +240,7 @@ template<Derived_from_action Action>
 void udp_stream<Action>::close() {
     std::lock_guard<std::mutex> m_lock(m);
     if (!running)
-        log.throw_exception("Failed to close udp stream.");
+        log.throw_exception<network_error>("Failed to close udp stream.");
 
     if (v == ipv::v4 || v == ipv::v4v6) {
         socket_v4.cancel();
@@ -269,21 +256,26 @@ void udp_stream<Action>::close() {
 template<Derived_from_action Action>
 void udp_stream<Action>::register_async_send() {
     std::lock_guard<std::mutex> m_lock(m);
-    if (!running || !act.get_running())
+    if (!running || !act.is_running())
         return;
 
     asio::post(socket_v4.get_executor(), [this] {
-        typename action_type::packet_type pckt;
+        if (!this->act.is_running())
+            return;
+
         try {
             // Performs init a packet base on TWrapper_packet protocol
             // NOTE: init_packet can wait
-            if (!this->act.init_packet(pckt))
-                return;
+            typename action_type::packet_type pckt{};
+            this->act.init_packet(pckt);
+
+			if(pckt.get_endpoint().address == buffer_address_type{})
+				return;
 
             // Sends the packet
             {
-                system::error_code          ec;
                 std::lock_guard<std::mutex> m_lock(this->m);
+                system::error_code          ec;
                 auto                        native_remote_endpoint = pckt.get_endpoint();
                 asio::const_buffer          buffer{pckt.data(), pckt.size()};
                 endpoint_type               remote_endpoint{
@@ -300,8 +292,8 @@ void udp_stream<Action>::register_async_send() {
             }
 
             this->register_async_send();
-        } catch (const noheap::runtime_error &_excp) {
-            this->act.set_error(_excp, pckt.get_endpoint().address);
+        } catch (const noheap::runtime_error &excp) {
+            this->act.set_error(excp);
             return;
         }
     });
@@ -309,16 +301,20 @@ void udp_stream<Action>::register_async_send() {
 template<Derived_from_action Action>
 void udp_stream<Action>::register_async_receive(ipv v) {
     std::lock_guard<std::mutex> m_lock(m);
-    if (!running || !act.get_running())
+    if (!running || !act.is_running())
         return;
 
     const auto handler = [this, v](system::error_code ec, std::size_t) {
-        decltype(auto) pckt =
-            v == ipv::v4 ? this->receive_pckt_v4 : this->receive_pckt_v6;
-        decltype(auto) receive_endpoint =
-            v == ipv::v4 ? this->receive_endpoint_v4 : this->receive_endpoint_v6;
+        if (!this->act.is_running())
+            return;
+
         try {
             handle_error(ec);
+
+            decltype(auto) pckt =
+                v == ipv::v4 ? this->receive_pckt_v4 : this->receive_pckt_v6;
+            decltype(auto) receive_endpoint =
+                v == ipv::v4 ? this->receive_endpoint_v4 : this->receive_endpoint_v6;
 
             // Handles the packet TWrapper_packet protocol
             {
@@ -329,9 +325,10 @@ void udp_stream<Action>::register_async_receive(ipv v) {
                 this->act.handle_packet(std::move(pckt));
                 pckt = {};
             }
+
             this->register_async_receive(v);
-        } catch (const noheap::runtime_error &_excp) {
-            this->act.set_error(_excp, pckt.get_endpoint().address);
+        } catch (const noheap::runtime_error &excp) {
+            this->act.set_error(excp);
             return;
         };
     };
@@ -348,7 +345,7 @@ void udp_stream<Action>::handle_error(const system::error_code &ec) {
     if (!ec.value())
         return;
 
-    log.throw_exception("Network error: {}", ec.message());
+    log.throw_exception<network_error>("Network error: {}", ec.message());
 }
 
 buffer_address_type utils::get_address_bytes(address_type addr) {
@@ -435,7 +432,7 @@ buffer_address_type utils::string_address_to_bytes(std::string_view address, ipv
 
         return buffer_tmp;
     } catch (...) {
-        throw noheap::runtime_error("Invalid string of ip address: {}.", address);
+        throw noheap::logic_error("Invalid string of ip address: {}.", address);
     }
 }
 

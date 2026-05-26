@@ -40,6 +40,7 @@ public:
     inline typename noise_context_type::cipher_state &get_payload_cipher_state();
     inline typename noise_context_type::cipher_state &get_header_cipher_state_sender();
     inline typename noise_context_type::cipher_state &get_header_cipher_state_receiver();
+    inline typename noise_context_type::hash_state   &get_hash_state();
     inline typename noise_context_type::random_state &get_random_state();
 
     inline void start();
@@ -98,22 +99,20 @@ essu::noise_handshake_context::noise_handshake_context(
 void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     check_noise_action(noise::noise_action::WRITE_MESSAGE);
 
-    auto &control_unit = get_control_unit(pckt);
+    decltype(auto) control_unit = get_control_unit(pckt);
 
     // Gets noise message
     if (!fragmentation) {
         // Generates random value
         if (status == status_enum::HS3) {
-            random_state.padding_buffer.set(
-                {handshake_payload.data(), handshake_payload.size()}, 0);
+            random_state.padding_buffer.set(noheap::make_span(handshake_payload), 0);
             random_state.pad();
             noise_context.get_handshake_payload_buffer().set(
-                {handshake_payload.data(), handshake_payload.size()},
-                handshake_payload.size());
+                noheap::make_span(handshake_payload), handshake_payload.size());
         }
 
         noise_context.get_handshake_buffer().set(
-            {buffer_handshake_message.data(), buffer_handshake_message.size()}, 0);
+            noheap::make_span(buffer_handshake_message), 0);
         noise_context.set_handshake_message();
 
         // Adds ephemeral key obfuscation on ephemeral key
@@ -163,7 +162,7 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
 void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
     check_noise_action(noise::noise_action::READ_MESSAGE);
 
-    auto &control_unit = get_control_unit(pckt);
+    decltype(auto) control_unit = get_control_unit(pckt);
 
     // Determines size of payload data
     std::uint64_t payload_size = 0;
@@ -182,7 +181,7 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
             && control_unit.header.type != unit_type::unit_type_enum::session_created)
         || (status == status_enum::HS3
             && control_unit.header.type != unit_type::unit_type_enum::session_confirmed))
-        this->log.throw_exception("Invalid type of handshake packet.");
+        this->log.throw_exception<protocol_error>("Invalid type of handshake packet.");
 
     // Copies accepted unit to buffer of noise handshake message
     std::copy(control_unit.buffer.begin(), control_unit.buffer.end(),
@@ -202,11 +201,11 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
     else if (status == status_enum::HS3)
         // Sets buffer to get random value
         noise_context.get_handshake_payload_buffer().set(
-            {handshake_payload.data(), handshake_payload.size()}, 0);
+            noheap::make_span(handshake_payload), 0);
 
     // Sets noise message
-    noise_context.get_handshake_buffer().set(
-        {buffer_handshake_message.data(), offset_noise_handshake_unit}, payload_size);
+    noise_context.get_handshake_buffer().set(noheap::make_span(buffer_handshake_message),
+                                             payload_size);
     noise_context.get_handshake_message();
 
     buffer_handshake_message    = {};
@@ -225,6 +224,10 @@ typename essu::noise_context_type::cipher_state &
 typename essu::noise_context_type::cipher_state &
     essu::noise_handshake_context::get_header_cipher_state_receiver() {
     return header_cipher_state_receiver;
+}
+typename essu::noise_context_type::hash_state &
+    essu::noise_handshake_context::get_hash_state() {
+    return hash_state;
 }
 typename essu::noise_context_type::random_state &
     essu::noise_handshake_context::get_random_state() {
@@ -264,11 +267,12 @@ void essu::noise_handshake_context::start() {
     unique_value_previous       = unique_value;
     unique_value                = {};
     payload_cipher_state.init({});
-    header_cipher_state_sender.init({});
-    header_cipher_state_receiver.init({});
     random_state.reseed();
 
-    generate_pair_ephemeral_obfs_key();
+    // If header cipher states does not have encrypt key it derives ephemeral states:
+    // It is thuth only if current handshake is the first one
+    if (!header_cipher_state_sender.has_encrypt_key())
+        generate_pair_ephemeral_obfs_key();
 
     noise_context.init(role);
     noise_context.set_prologue(ext);
@@ -286,7 +290,8 @@ void essu::noise_handshake_context::stop() {
         if (remote_public_key == noise_context_type::buffer_key_type{})
             remote_public_key = handshake_remote_public_key;
         else
-            this->log.throw_exception("Invalid remote public key from handshake.");
+            this->log.throw_exception<protocol_error>(
+                "Invalid remote public key from handshake.");
     }
 
     noise_context.stop();
@@ -303,22 +308,23 @@ void essu::noise_handshake_context::check_noise_action(noise::noise_action expec
     auto action = noise_context.get_action();
 
     if (action == noise::noise_action::FAILED)
-        this->log.throw_exception("Failed to handshake.");
+        this->log.throw_exception<protocol_error>("Failed to handshake.");
 
     if (action == expected
         || (expected == noise::noise_action::WRITE_MESSAGE && fragmentation))
         return;
 
     if (action == noise::noise_action::WRITE_MESSAGE)
-        this->log.throw_exception("Expected message to be sent.");
+        this->log.throw_exception<noheap::runtime_error>("Expected message to be sent.");
     else if (action == noise::noise_action::READ_MESSAGE)
-        this->log.throw_exception("Expected message to be received.");
+        this->log.throw_exception<noheap::runtime_error>(
+            "Expected message to be received.");
     else if (action == noise::noise_action::SPLIT)
-        this->log.throw_exception("Expected to stop handshake.");
+        this->log.throw_exception<noheap::runtime_error>("Expected to stop handshake.");
     else if (action == noise::noise_action::COMPLETE)
-        this->log.throw_exception("Handshake already completed.");
+        this->log.throw_exception<noheap::runtime_error>("Handshake already completed.");
     else if (action == noise::noise_action::NONE)
-        this->log.throw_exception("Action is not required.");
+        this->log.throw_exception<noheap::runtime_error>("Action is not required.");
     else
         this->log.abort_invalid_state();
 }
@@ -340,9 +346,6 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
         xor_public_key_with_buffer(local_keypair.pub);
         xor_public_key_with_buffer(remote_public_key);
     }
-    // Mixes the public key with the previous unique value
-    xor_public_key_with_buffer(hash_state.get_hash(
-        {unique_value_previous.data(), unique_value_previous.size()}));
 
     // Gets 32 bytes-hash of public key
     auto public_key_hash = noheap::clip_buffer<32, 0>(
@@ -350,14 +353,15 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
 
     // Generates keystream
     noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 3
-                       + noise_config.mac_size>
+                       + sizeof(std::uint64_t) + noise_config.mac_size>
                                      keystream{};
     noise_context_type::cipher_state cipher_tmp;
-    cipher_tmp.set_encrypt_key(public_key_hash);
-    cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
+    cipher_tmp.encrypt_buffer.set(noheap::make_span(keystream),
                                   keystream.size() - noise_config.mac_size);
+    cipher_tmp.set_encrypt_key(public_key_hash);
     cipher_tmp.encrypt({});
 
+    // Gets two ephemeral header obfuscation keys
     auto header_obfs_key1 =
         noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>, 0>(
             keystream);
@@ -366,6 +370,7 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
                             noheap::buffer_size<noise_context_type::buffer_key_type>>(
             keystream);
 
+    // Sets these keys and reset nonces of header cipher states
     if (role == noise::noise_role::INITIATOR) {
         header_cipher_state_sender.set_encrypt_key(header_obfs_key1);
         header_cipher_state_receiver.set_encrypt_key(header_obfs_key2);
@@ -373,16 +378,25 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
         header_cipher_state_sender.set_encrypt_key(header_obfs_key2);
         header_cipher_state_receiver.set_encrypt_key(header_obfs_key1);
     }
+    header_cipher_state_sender.set_encrypt_nonce({});
+    header_cipher_state_receiver.set_encrypt_nonce({});
 
+    // Sets ephemeral obfuscation key
     ephemeral_obfs_key =
         noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
                             noheap::buffer_size<noise_context_type::buffer_key_type> * 2>(
             keystream);
+
+    // Sets ephemeral handshake id
+    handshake_id = noheap::represent_bytes<std::uint64_t>(
+        noheap::clip_buffer<sizeof(std::uint64_t),
+                            noheap::buffer_size<noise_context_type::buffer_key_type> * 3>(
+            keystream));
 }
 
 // Generates posthandshake header obfuscation key + unique value
 void essu::noise_handshake_context::generate_posthandshake_unique_values() {
-    // Mixes the current handshake payload with the previous handshake payload
+    // Mixes the current handshake payload with the unique value previous
     std::transform(handshake_payload.begin(),
                    handshake_payload.begin() + unique_value_previous.size(),
                    unique_value_previous.begin(), handshake_payload.begin(),
@@ -390,20 +404,21 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
 
     // Generates unique values
     std::decay_t<decltype(handshake_hash)> unique_value_two;
-    hash_state.hkdf({handshake_hash.data(), handshake_hash.size()},
-                    {handshake_payload.data(), handshake_payload.size()},
-                    {unique_value.data(), unique_value.size()},
-                    {unique_value_two.data(), unique_value_two.size()});
+    hash_state.hkdf(noheap::make_span(handshake_hash),
+                    noheap::make_span(handshake_payload), noheap::make_span(unique_value),
+                    noheap::make_span(unique_value_two));
+
     // Handles the first unique_value
     {
-        available_batch_number = std::clamp<std::uint16_t>(
-            noheap::represent_bytes<std::uint16_t>(
-                noheap::clip_buffer<sizeof(std::uint16_t), 0>(unique_value)),
+        available_batch_number = std::clamp<std::uint32_t>(
+            noheap::represent_bytes<std::uint32_t>(
+                noheap::clip_buffer<sizeof(std::uint32_t), 0>(unique_value)),
             min_available_batch_number, max_available_batch_number);
         handshake_id = noheap::represent_bytes<std::uint64_t>(
             noheap::clip_buffer<sizeof(std::uint64_t), sizeof(std::uint16_t)>(
                 unique_value));
 
+        // Gets two nonce values
         noise_context_type::buffer_nonce_type value1 =
             noheap::represent_bytes<noise_context_type::buffer_nonce_type>(
                 noheap::clip_buffer<
@@ -417,10 +432,7 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
                         + noheap::buffer_size<noise_context_type::buffer_nonce_type>>(
                     unique_value));
 
-        // Maximum initial value of nonce(counter block) is 2^48−1
-        (*reinterpret_cast<std::uint64_t *>(value1.data())) >>= 16;
-        (*reinterpret_cast<std::uint64_t *>(value2.data())) >>= 16;
-
+        // Sets these nonce values
         if (noise_context.get_role() == noise::noise_role::INITIATOR) {
             payload_cipher_state.set_encrypt_nonce(value1);
             payload_cipher_state.set_decrypt_nonce(value2);
@@ -440,10 +452,11 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
         cipher_tmp.set_encrypt_key(
             noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
                                 0>(unique_value_two));
-        cipher_tmp.encrypt_buffer.set({keystream.data(), keystream.size()},
+        cipher_tmp.encrypt_buffer.set(noheap::make_span(keystream),
                                       keystream.size() - noise_config.mac_size);
         cipher_tmp.encrypt({});
 
+        // Gets two header obfuscation keys
         auto header_obfs_key1 =
             noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
                                 0>(keystream);
@@ -452,6 +465,7 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
                                 noheap::buffer_size<noise_context_type::buffer_key_type>>(
                 keystream);
 
+        // Sets these keys and reset nonces of header cipher states
         if (role == noise::noise_role::INITIATOR) {
             header_cipher_state_sender.set_encrypt_key(header_obfs_key1);
             header_cipher_state_receiver.set_encrypt_key(header_obfs_key2);
@@ -459,6 +473,8 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
             header_cipher_state_sender.set_encrypt_key(header_obfs_key2);
             header_cipher_state_receiver.set_encrypt_key(header_obfs_key1);
         }
+        header_cipher_state_sender.set_encrypt_nonce({});
+        header_cipher_state_receiver.set_encrypt_nonce({});
     }
 }
 

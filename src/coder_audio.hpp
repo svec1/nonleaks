@@ -42,7 +42,7 @@ private:
 
 template<audio_config _cfg>
 coder_audio<_cfg>::coder_audio() {
-    std::ssize_t error;
+    noheap::ssize_t error;
 
     enc = this->malloc<OpusEncoder *>(opus_encoder_get_size(cfg.channels));
     dec = this->malloc<OpusDecoder *>(opus_decoder_get_size(cfg.channels));
@@ -65,7 +65,7 @@ template<audio_config _cfg>
 coder_audio<_cfg>::encode_buffer_type
     coder_audio<_cfg>::encode(const noencode_buffer_type &buffer) {
     encode_buffer_type buffer_tmp{};
-    std::ssize_t       count_frames = opus_encode(
+    noheap::ssize_t       count_frames = opus_encode(
         enc, reinterpret_cast<const opus_int16 *>(buffer.data()), cfg.period_size,
         reinterpret_cast<std::uint8_t *>(buffer_tmp.data()), encode_buffer_size);
 
@@ -80,7 +80,7 @@ coder_audio<_cfg>::noencode_buffer_type
     static bool lost = false;
 
     noencode_buffer_type buffer_tmp{};
-    std::ssize_t         count_frames;
+    noheap::ssize_t         count_frames;
 
     count_frames = opus_decode(
         dec, _lost ? NULL : reinterpret_cast<const std::uint8_t *>(buffer.data()),

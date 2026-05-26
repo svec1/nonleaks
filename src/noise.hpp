@@ -44,7 +44,7 @@ enum class noise_action : std::uint16_t {
     COMPLETE      = NOISE_ACTION_COMPLETE,
 };
 
-enum class ecdh_type : std::uint16_t {
+enum class dh_type : std::uint16_t {
     UNKNOWN   = 0,
     NONE      = NOISE_DH_NONE,
     X25519    = NOISE_DH_CURVE25519,
@@ -93,41 +93,54 @@ inline std::string_view get_noise_role_string(noise_role role) {
     return "UNKNOWN";
 }
 
-template<noise_pattern pattern, ecdh_type ecdh, ecdh_type hybrid_ecdh>
-consteval std::size_t pattern_ecdh_is_compatible() {
+template<noise_pattern pattern, dh_type dh, dh_type hybrid_dh>
+consteval std::size_t pattern_dh_is_compatible() {
     if constexpr (((pattern == noise_pattern::XX || pattern == noise_pattern::XK)
-                   && ecdh == ecdh_type::X25519)
+                   && dh == dh_type::X25519)
                   || ((pattern == noise_pattern::XX_HFS
                        || pattern == noise_pattern::XK_HFS)
-                      && ecdh == ecdh_type::X25519
-                      && (hybrid_ecdh == ecdh_type::MLKEM768
-                          || hybrid_ecdh == ecdh_type::MLKEM1024)))
+                      && dh == dh_type::X25519
+                      && (hybrid_dh == dh_type::MLKEM768
+                          || hybrid_dh == dh_type::MLKEM1024)))
         return true;
     return false;
 }
 
-template<ecdh_type ecdh>
+template<dh_type dh>
 consteval std::size_t get_shared_secret_key_size() {
-    if constexpr (ecdh == ecdh_type::X25519 || ecdh == ecdh_type::MLKEM768
-                  || ecdh == ecdh_type::MLKEM1024)
+    if constexpr (dh == dh_type::X25519 || dh == dh_type::MLKEM768
+                  || dh == dh_type::MLKEM1024)
         return 32;
     else
         return 0;
 }
-template<ecdh_type ecdh>
-consteval std::size_t get_kem_public_key_size() {
-    if constexpr (ecdh == ecdh_type::MLKEM768)
+template<dh_type dh>
+consteval std::size_t get_private_key_size() {
+    if constexpr (dh == dh_type::X25519)
+        return 32;
+    else if constexpr (dh == dh_type::MLKEM768)
+        return 2400;
+    else if constexpr (dh == dh_type::MLKEM1024)
+        return 3168;
+    else
+        return 0;
+}
+template<dh_type dh>
+consteval std::size_t get_public_key_size() {
+    if constexpr (dh == dh_type::X25519)
+        return 32;
+    else if constexpr (dh == dh_type::MLKEM768)
         return 1184;
-    else if constexpr (ecdh == ecdh_type::MLKEM1024)
+    else if constexpr (dh == dh_type::MLKEM1024)
         return 1568;
     else
         return 0;
 }
-template<ecdh_type ecdh>
-consteval std::size_t get_kem_cipher_text_size() {
-    if constexpr(ecdh == ecdh_type::MLKEM768)
+template<dh_type dh>
+consteval std::size_t get_cipher_text_size() {
+    if constexpr (dh == dh_type::MLKEM768)
         return 1088;
-    else if constexpr (ecdh == ecdh_type::MLKEM1024)
+    else if constexpr (dh == dh_type::MLKEM1024)
         return 1568;
     else
         return 0;
@@ -158,45 +171,45 @@ consteval std::size_t get_hash_size() {
     else if constexpr (hash == hash_type::SHA512 || hash == hash_type::SHA3512)
         return 64;
     else
-        static_assert(false, "The passed hash type is not supported.");
+        return 0;
 }
 
-template<noise_pattern _pattern, ecdh_type _ecdh, ecdh_type _hybrid_ecdh,
-         cipher_type _cipher, hash_type _hash>
+template<noise_pattern _pattern, dh_type _dh, dh_type _hybrid_dh, cipher_type _cipher,
+         hash_type _hash>
 struct noise_context_config {
-    static constexpr noise_pattern pattern     = _pattern;
-    static constexpr ecdh_type     ecdh        = _ecdh;
-    static constexpr ecdh_type     hybrid_ecdh = _hybrid_ecdh;
-    static constexpr cipher_type   cipher      = _cipher;
-    static constexpr hash_type     hash        = _hash;
+    static constexpr noise_pattern pattern   = _pattern;
+    static constexpr dh_type       dh        = _dh;
+    static constexpr dh_type       hybrid_dh = _hybrid_dh;
+    static constexpr cipher_type   cipher    = _cipher;
+    static constexpr hash_type     hash      = _hash;
 
     static constexpr std::size_t mac_size   = get_mac_size<cipher>();
     static constexpr std::size_t nonce_size = get_nonce_size<cipher>();
 
     static consteval std::size_t get_hs1_size() {
         if constexpr (pattern == noise_pattern::XX)
-            return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_public_key_size<dh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XK)
-            return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_public_key_size<dh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XX_HFS
                            || pattern == noise_pattern::XK_HFS) {
-            return get_kem_public_key_size<hybrid_ecdh>()
-                   + get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>() * 2;
+            return get_public_key_size<hybrid_dh>() + get_public_key_size<dh>()
+                   + get_mac_size<cipher>() * 2;
         } else
             static_assert(false, "Invalid noise context config.");
     }
     static consteval std::size_t get_hs2_size() {
         if constexpr (pattern == noise_pattern::XX)
-            return get_shared_secret_key_size<ecdh>() * 2 + get_mac_size<cipher>() * 2;
+            return get_public_key_size<dh>() * 2 + get_mac_size<cipher>() * 2;
         else if constexpr (pattern == noise_pattern::XK)
-            return get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_public_key_size<dh>() + get_mac_size<cipher>();
         else if constexpr (pattern == noise_pattern::XX_HFS)
-            return get_kem_cipher_text_size<hybrid_ecdh>()
-                   + noise::get_shared_secret_key_size<ecdh>() * 2
-                   + get_mac_size<cipher>() * 2 + 16;
+            return get_cipher_text_size<hybrid_dh>()
+                   + noise::get_public_key_size<dh>() * 2 + get_mac_size<cipher>() * 2
+                   + 16;
         else if constexpr (pattern == noise_pattern::XK_HFS)
-            return get_kem_cipher_text_size<hybrid_ecdh>()
-                   + noise::get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>();
+            return get_cipher_text_size<hybrid_dh>() + noise::get_public_key_size<dh>()
+                   + get_mac_size<cipher>();
         else
             static_assert(false, "Invalid noise context config.");
     }
@@ -204,15 +217,16 @@ struct noise_context_config {
         if constexpr (pattern == noise_pattern::XX || pattern == noise_pattern::XK
                       || pattern == noise_pattern::XX_HFS
                       || pattern == noise_pattern::XK_HFS)
-            return noise::get_shared_secret_key_size<ecdh>() + get_mac_size<cipher>() * 2
+            return noise::get_shared_secret_key_size<dh>() + get_mac_size<cipher>() * 2
                    + handshake_payload_size;
         else
             static_assert(false, "Invalid noise context config.");
     }
 
-    static_assert(ecdh != ecdh_type::UNKNOWN, "Undefined ecdh type.");
-    static_assert(noise::pattern_ecdh_is_compatible<pattern, ecdh, hybrid_ecdh>(),
-                  "Noise pattern and ecdh type is not compatible.");
+    static_assert(hash != hash_type::UNKNOWN, "Undefined hash type.");
+    static_assert(cipher != cipher_type::UNKNOWN, "Undefined cipher type.");
+    static_assert(noise::pattern_dh_is_compatible<pattern, dh, hybrid_dh>(),
+                  "Pattern and dh types is not compatible.");
 };
 
 template<noise::noise_context_config _config>
@@ -222,15 +236,15 @@ public:
     static constexpr NoiseProtocolId             nid_static{
                     .prefix_id  = NOISE_PREFIX_PSK,
                     .pattern_id = static_cast<std::uint16_t>(config.pattern),
-                    .dh_id      = static_cast<std::uint16_t>(config.ecdh),
+                    .dh_id      = static_cast<std::uint16_t>(config.dh),
                     .cipher_id  = static_cast<std::uint16_t>(config.cipher),
                     .hash_id    = static_cast<std::uint16_t>(config.hash),
-                    .hybrid_id  = static_cast<std::uint16_t>(config.hybrid_ecdh),
+                    .hybrid_id  = static_cast<std::uint16_t>(config.hybrid_dh),
                     .reserved   = {},
     };
 
 public:
-    using buffer_key_type   = buffer_type<get_shared_secret_key_size<config.ecdh>()>;
+    using buffer_key_type   = buffer_type<get_shared_secret_key_size<config.dh>()>;
     using buffer_nonce_type = buffer_type<get_nonce_size<config.cipher>()>;
 
 private:
@@ -353,6 +367,9 @@ public:
         std::uint64_t     get_encrypt_counter_block() const;
         std::uint64_t     get_decrypt_counter_block() const;
 
+        bool has_encrypt_key();
+        bool has_decrypt_key();
+
     private:
         void set_states(NoiseCipherState *_encrypt_state,
                         NoiseCipherState *_decrypt_state);
@@ -367,6 +384,40 @@ public:
     private:
         NoiseCipherState *encrypt_state = nullptr;
         NoiseCipherState *decrypt_state = nullptr;
+    };
+
+    template<dh_type _dh>
+    struct dh_state {
+        static constexpr dh_type dh = _dh;
+
+        using buffer_private_key_type = buffer_type<get_private_key_size<dh>()>;
+        using buffer_public_key_type  = buffer_type<get_public_key_size<dh>()>;
+        using buffer_shared_secret_key_type =
+            buffer_type<get_shared_secret_key_size<config.dh>()>();
+
+    public:
+        dh_state();
+
+        dh_state(dh_state &&handle)           = delete;
+        dh_state(const dh_state &)            = delete;
+        dh_state &operator=(const dh_state &) = delete;
+
+        ~dh_state();
+
+    public:
+        void generate_keypair();
+        void generate_dependent_keypair(const dh_state &other);
+        void calculate(const dh_state                &other,
+                       buffer_shared_secret_key_type &shared_secret_key);
+
+        void       set_role(noise_role role);
+        void       set_keypair(const keypair_type &keypair);
+        void       set_public_key(const buffer_public_key_type &public_key);
+        noise_role get_role();
+        void       get_keypair(keypair_type &keypair);
+
+    private:
+        NoiseDHState *dhstate;
     };
 
     struct hash_state {
@@ -581,14 +632,14 @@ void noise::noise_context<_config>::cipher_state::set_decrypt_nonce(
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_encrypt_counter_block(
     std::uint64_t counter) {
-	decltype(auto) nonce_tmp = this->get_encrypt_nonce();
+    decltype(auto) nonce_tmp = this->get_encrypt_nonce();
     std::memcpy(&nonce_tmp, &counter, sizeof(counter));
     this->set_encrypt_nonce(nonce_tmp);
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_decrypt_counter_block(
     std::uint64_t counter) {
-	decltype(auto) nonce_tmp = this->get_decrypt_nonce();
+    decltype(auto) nonce_tmp = this->get_decrypt_nonce();
     std::memcpy(&nonce_tmp, &counter, sizeof(counter));
     this->set_decrypt_nonce(nonce_tmp);
 }
@@ -653,6 +704,14 @@ std::uint64_t
     return counter;
 }
 template<noise::noise_context_config _config>
+bool noise::noise_context<_config>::cipher_state::has_encrypt_key() {
+	return noise_cipherstate_has_key(encrypt_state);
+}
+template<noise::noise_context_config _config>
+bool noise::noise_context<_config>::cipher_state::has_decrypt_key() {
+	return noise_cipherstate_has_key(decrypt_state);
+}
+template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::check_encrypt_key() const {
     if (!noise_cipherstate_has_key(encrypt_state))
         handle_error(0, "The encrypt state does not has a key.");
@@ -669,6 +728,91 @@ void noise::noise_context<_config>::cipher_state::set_states(
 
     encrypt_state = _encrypt_state;
     decrypt_state = _decrypt_state;
+}
+
+// DH state
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+noise::noise_context<_config>::dh_state<_dh>::dh_state() {
+    std::size_t ret;
+    if ((ret = noise_dhstate_new_by_id(&dhstate, static_cast<std::uint16_t>(dh)))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to init dh state.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+noise::noise_context<_config>::dh_state<_dh>::~dh_state() {
+    std::size_t ret;
+    if ((ret = noise_dhstate_free(dhstate)) != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to free dh state.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::generate_keypair() {
+    std::size_t ret;
+    if ((ret = noise_dhstate_generate_keypair(dhstate)) != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to generate keypair.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::generate_dependent_keypair(
+    const dh_state &other) {
+    std::size_t ret;
+    if ((ret = noise_dhstate_generate_dependent_keypair(dhstate, other.dhstate))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to generate dependent keypair.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::calculate(
+    const dh_state &other, buffer_shared_secret_key_type &shared_secret_key) {
+    std::size_t ret, shared_secret_key_size;
+    if ((ret = noise_dhstate_calculate(dhstate, other.dhstate, shared_secret_key.data(),
+                                       &shared_secret_key_size))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to calculate dh.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::set_role(noise_role role) {
+    noise_dhstate_set_role(dhstate, static_cast<std::uint16_t>(role));
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::set_keypair(
+    const keypair_type &keypair) {
+    std::size_t ret;
+    if ((ret =
+             noise_dhstate_set_keypair(dhstate, keypair.priv.data(), keypair.priv.size(),
+                                       keypair.pub.data(), keypair.pub.size()))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to set keypair.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::set_public_key(
+    const buffer_public_key_type &public_key) {
+    std::size_t ret;
+    if ((ret =
+             noise_dhstate_set_public_key(dhstate, public_key.data(), public_key.size()))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to set public key.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+noise::noise_role noise::noise_context<_config>::dh_state<_dh>::get_role() {
+    return noise_role(noise_dhstate_get_role(dhstate));
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+void noise::noise_context<_config>::dh_state<_dh>::get_keypair(keypair_type &keypair) {
+    std::size_t ret;
+    if ((ret = noise_dhstate_get_keypair(
+             dhstate, reinterpret_cast<noheap::ubyte *>(keypair.priv.data()),
+             keypair.priv.size(), reinterpret_cast<noheap::ubyte *>(keypair.pub.data()),
+             keypair.pub.size()))
+        != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to get keypair.");
 }
 
 // Hash state
@@ -915,29 +1059,19 @@ noise::buffer_name_id_type noise::noise_context<_config>::get_name_id() {
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::keypair_type
     noise::noise_context<_config>::generate_keypair() {
-    keypair_type                  kp;
-    noise::noise_context<_config> context_tmp;
+    keypair_type                       keypair;
+    noise_context::dh_state<config.dh> dh_state_tmp;
 
-    context_tmp.init(noise_role::INITIATOR);
-    NoiseDHState *dh =
-        noise_handshakestate_get_local_keypair_dh(context_tmp.handshakestate);
+    dh_state_tmp.generate_keypair();
+    dh_state_tmp.get_keypair(keypair);
 
-    std::size_t ret;
-    if ((ret = noise_dhstate_generate_keypair(dh)) != NOISE_ERROR_NONE)
-        handle_error(ret, "Failed to generate keypair.");
-    if ((ret = noise_dhstate_get_keypair(
-             dh, reinterpret_cast<noheap::ubyte *>(kp.priv.data()), kp.priv.size(),
-             reinterpret_cast<noheap::ubyte *>(kp.pub.data()), kp.pub.size()))
-        != NOISE_ERROR_NONE)
-        handle_error(ret, "Failed to get generated keypair.");
-
-    return kp;
+    return keypair;
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::handle_error(std::size_t      error,
                                                  std::string_view extention_error) {
     if (error) {
-        noheap::buffer_type<char, 64> buffer_noise_error{};
+        noheap::buffer_chars_type<64> buffer_noise_error{};
         noise_strerror(error, buffer_noise_error.data(), buffer_noise_error.size());
         log.throw_exception("{} {}", extention_error, buffer_noise_error.data());
     } else

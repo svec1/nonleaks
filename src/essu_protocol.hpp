@@ -18,14 +18,12 @@ struct session_info_type {
     };
 
 public:
-    session_info_type(const log_proxy &_log, network::ipv _v,
-                      network::buffer_address_type _remote_address,
-                      std::uint16_t _remote_port, noise::noise_role _role,
-                      noise::buffer_prologue_extention_type      _ext,
+    session_info_type(const log_proxy &_log, network::native_endpoint _remote_endpoint,
+                      noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
                       const noise_context_type::buffer_key_type &_remote_public_key,
                       const noise::buffer_pre_shared_key_type   &_pre_shared_key,
                       const noise_context_type::keypair_type    &_local_keypair)
-        : log(_log), remote_endpoint(_v, _remote_address, _remote_port),
+        : log(_log), remote_endpoint(_remote_endpoint),
           handshake_context(_role, _ext, _remote_public_key, _pre_shared_key,
                             _local_keypair) {
         reset_state();
@@ -55,16 +53,16 @@ public:
 
 private:
     noise_handshake_context handshake_context;
-    std::uint64_t           handshake_number = 0;
+    std::uint16_t           handshake_number = 0;
 
     status_enum   status;
-    std::uint64_t batch_sent_number;
-    std::uint64_t batch_received_number;
-    std::uint64_t sender_unit_number;
-    std::uint64_t receiver_unit_number;
-    std::uint64_t sender_key_iteration_number;
-    std::uint64_t receiver_key_iteration_number;
-    std::uint64_t undecrypted_batch_number;
+    std::uint32_t batch_sent_number;
+    std::uint32_t batch_received_number;
+    std::uint32_t sender_unit_number;
+    std::uint32_t receiver_unit_number;
+    std::uint32_t sender_key_iteration_number;
+    std::uint32_t receiver_key_iteration_number;
+    std::uint32_t undecrypted_batch_number;
     bool          was_sent_retry;
     bool          was_received_retry;
 };
@@ -80,6 +78,9 @@ public:
     static inline session_info_type::status_enum
         update_status(session_info_type &session_info);
 
+    static inline bool check_affiliation_packet(session_info_type &session_info,
+                                                packet_type       &pckt);
+
     static inline std::uint64_t
         get_handshake_number(const session_info_type &session_info);
     static inline std::uint64_t get_handshake_id(const session_info_type &session_info);
@@ -87,8 +88,10 @@ public:
     static inline bool          can_receive_packet(const session_info_type &session_info);
 
 private:
+    static inline void check_packet_compliance(const session_info_type &session_info,
+                                               const packet_type       &pckt);
     static inline void check_protocol_compliance(const session_info_type &session_info,
-                                                 packet_type             &pckt);
+                                                 bool                     receive);
     static inline noise::buffer_type<header_data_size> derive_header_obfs_key(
         typename noise_context_type::cipher_state &header_cipher_state);
 };
@@ -103,21 +106,19 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
     decltype(auto) random_state     = session_info.handshake_context.get_random_state();
     bool session_handshake_complete = session_info.handshake_context.is_complete();
 
-    check_protocol_compliance(session_info, pckt);
-    if (session_handshake_complete && session_info.was_sent_retry)
-        session_info.log.throw_exception("Expected to rehandshake.");
+    check_protocol_compliance(session_info, false);
+    check_packet_compliance(session_info, pckt);
 
     // Inits packet like handshake message if necessary
     if (session_info.handshake_context.get_action() == noise::noise_action::WRITE_MESSAGE
-        && session_info.batch_sent_number
-               % std::uniform_int_distribution(1, 3)(random_state.generator))
+        && std::uniform_int_distribution(0, 1)(random_state.generator))
         session_info.handshake_context.init_packet(pckt);
 
     // If retry or available batch number is reached
     if (session_info.was_received_retry
         || (session_handshake_complete
             && session_info.batch_sent_number
-                   == session_info.handshake_context.get_available_batch_number())) {
+                   == session_info.handshake_context.get_available_batch_number() - 1)) {
         set_control_session_packet(pckt, unit_type::unit_type_enum::retry);
         session_info.was_sent_retry = true;
     }
@@ -130,8 +131,21 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
     for (std::uint64_t i = 0; i < pckt->units.size(); ++i) {
         unit_type &unit = pckt->units[i];
 
-        unit.header.number               = session_info.sender_unit_number++;
-        unit.header.key_iteration_number = session_info.sender_key_iteration_number;
+        // Sets some data of header
+        {
+            // Derives shared value
+            std::uint64_t shared_value;
+            std::memcpy(
+                &shared_value,
+                session_info.handshake_context.get_hash_state()
+                    .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
+                    .data(),
+                sizeof(shared_value));
+
+            unit.header.shared_value         = shared_value;
+            unit.header.number               = session_info.sender_unit_number++;
+            unit.header.key_iteration_number = session_info.sender_key_iteration_number;
+        }
 
         // Adds random padding
         {
@@ -155,7 +169,7 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
                     payload_size = 0;
                     break;
                 default:
-                    session_info.log.throw_exception(
+                    session_info.log.throw_exception<noheap::runtime_error>(
                         "Undefined packet type: {}.",
                         static_cast<std::size_t>(unit.header.type));
             }
@@ -185,12 +199,12 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         // Generates header obfuscation key based on the unit_number
         auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
-        // Adds header data obfuscation
-        std::transform(reinterpret_cast<noheap::rbyte *>(&unit.header),
-                       reinterpret_cast<noheap::rbyte *>(&unit.header)
-                           + sizeof(unit.header),
-                       obfs_key_tmp.data(),
-                       reinterpret_cast<noheap::rbyte *>(&unit.header), std::bit_xor{});
+        // Adds header data obfuscation, without shared value
+        std::transform(
+            reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(std::uint64_t),
+            reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
+            obfs_key_tmp.data(), reinterpret_cast<noheap::rbyte *>(&unit.header),
+            std::bit_xor{});
     }
 
     // Shuffles units in batch
@@ -206,8 +220,7 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
         session_info.handshake_context.get_header_cipher_state_receiver();
     bool session_handshake_complete = session_info.handshake_context.is_complete();
 
-    if (session_handshake_complete && session_info.was_received_retry)
-        session_info.log.throw_exception("Expected to rehandshake.");
+    check_protocol_compliance(session_info, true);
 
     // Selects possible unit number
     std::uint64_t count_decrypted_units   = 0;
@@ -216,24 +229,35 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
         session_info.receiver_unit_number + batch_window_number * batch_units_number;
     std::uint64_t possible_unit_number = session_info.receiver_unit_number;
     for (; possible_unit_number < available_units_window_number; ++possible_unit_number) {
-        // Generates header obfuscation key based on the possible_unit_number
+        // Derives possible shared value
+        std::uint64_t possible_shared_value;
+        std::memcpy(
+            &possible_shared_value,
+            session_info.handshake_context.get_hash_state()
+                .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
+                .data(),
+            sizeof(possible_shared_value));
+
+        // Generates header obfuscation key based
         auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         for (auto &unit : pckt->units) {
             unit_type test_unit = unit;
 
-            // Deletes header data obfuscation
-            std::transform(reinterpret_cast<noheap::rbyte *>(&test_unit.header),
+            // Deletes header data obfuscation, without shared value
+            std::transform(reinterpret_cast<noheap::rbyte *>(&test_unit.header)
+                               + sizeof(std::uint64_t),
                            reinterpret_cast<noheap::rbyte *>(&test_unit.header)
                                + sizeof(test_unit.header),
                            obfs_key_tmp.data(),
                            reinterpret_cast<noheap::rbyte *>(&test_unit.header),
                            std::bit_xor{});
 
-            if (test_unit.header.number != possible_unit_number)
+            if (test_unit.header.shared_value != possible_shared_value
+                && test_unit.header.number != possible_unit_number)
                 continue;
 
-            // Loop handling rekeys performed on the remote endpoint
+            // Loop handling rekeys performed in the remote endpoint
             for (; session_info.receiver_key_iteration_number
                    < test_unit.header.key_iteration_number;
                  ++session_info.receiver_key_iteration_number)
@@ -285,7 +309,7 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
         // max_undecrypted_batches_number count packets after handshake
         if (!session_handshake_complete
             || session_info.undecrypted_batch_number == max_undecrypted_batch_number)
-            session_info.log.throw_exception(
+            session_info.log.throw_exception<protocol_error>(
                 "Failed to decrypt last batches. [attempts to decrypt payload: {}]",
                 attempts_decrypt_number);
         return;
@@ -297,6 +321,8 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
               [](const auto &el_left, const auto &el_right) {
                   return el_left.header.number < el_right.header.number;
               });
+
+    check_packet_compliance(session_info, pckt);
 
     ++session_info.receiver_unit_number;
     ++session_info.batch_received_number;
@@ -318,6 +344,7 @@ void essu::protocol::start_handshake(session_info_type &session_info) {
 void essu::protocol::stop_handshake(session_info_type &session_info) {
     session_info.handshake_context.stop();
     session_info.reset_state();
+
     ++session_info.handshake_number;
     session_info.status = session_info_type::status_enum::COMPLETE;
 }
@@ -333,6 +360,45 @@ essu::session_info_type::status_enum
              || action == noise::noise_action::READ_MESSAGE)
         session_info.status = session_info_type::status_enum::EXCHANGE;
     return session_info.status;
+}
+bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
+                                              packet_type       &pckt) {
+    decltype(auto) header_cipher_state =
+        session_info.handshake_context.get_header_cipher_state_receiver();
+
+    std::uint64_t count_suitable_units = 0;
+    std::uint64_t available_units_window_number =
+        session_info.receiver_unit_number + batch_window_number * batch_units_number;
+    std::uint64_t possible_unit_number = session_info.receiver_unit_number;
+    for (; possible_unit_number < available_units_window_number; ++possible_unit_number) {
+        // Derives possible shared value
+        std::uint64_t possible_shared_value;
+        std::memcpy(
+            &possible_shared_value,
+            session_info.handshake_context.get_hash_state()
+                .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
+                .data(),
+            sizeof(possible_shared_value));
+
+        // Generates header obfuscation key to increase encrypt nonce
+        (void) derive_header_obfs_key(header_cipher_state);
+
+        for (const auto &unit : pckt->units) {
+            if (unit.header.shared_value != possible_shared_value)
+                continue;
+
+            ++count_suitable_units;
+            break;
+        }
+
+        if (count_suitable_units == pckt->units.size())
+            break;
+    }
+
+    header_cipher_state.set_encrypt_counter_block(
+        header_cipher_state.get_encrypt_counter_block()
+        - (possible_unit_number - session_info.receiver_unit_number));
+    return count_suitable_units == pckt->units.size();
 }
 
 std::uint64_t
@@ -356,22 +422,31 @@ bool essu::protocol::can_receive_packet(const session_info_type &session_info) {
                      == noise::noise_role::RESPONDER;
 }
 
+void essu::protocol::check_packet_compliance(const session_info_type &session_info,
+                                             const packet_type       &pckt) {
+    if (session_info.status == session_info_type::status_enum::COMPLETE) {
+        if (!is_posthandshake_packet(pckt))
+            session_info.log.throw_exception<protocol_error>(
+                "Invalid packet setting after handshake.");
+    } else if (!is_dummy_packet_type(pckt))
+        session_info.log.throw_exception<protocol_error>(
+            "Invalid packet setting for handshake.");
+}
 void essu::protocol::check_protocol_compliance(const session_info_type &session_info,
-                                               packet_type             &pckt) {
-    decltype(auto) control_unit = get_control_unit(pckt);
-
+                                               bool                     receive) {
     if (session_info.handshake_number == max_available_handshake_number)
-        session_info.log.throw_exception("Limit of handshakes has been reached.");
-    if (session_info.handshake_context.is_complete()) {
-        if (control_unit.header.type != unit_type::unit_type_enum::dummy
-            || is_control_session_unit_type(pckt->units[0].header.type)
-            || is_control_session_unit_type(pckt->units[1].header.type)
-            || is_control_session_unit_type(pckt->units[3].header.type))
-            session_info.log.throw_exception("Invalid packet setting after handshake.");
-    } else {
-        if (!is_dummy_packet_type(pckt))
-            session_info.log.throw_exception("Invalid packet setting for handshake.");
-    }
+        session_info.log.throw_exception<protocol_error>(
+            "Limit of handshakes has been reached.");
+    if (session_info.status == session_info_type::status_enum::COMPLETE
+        && (receive
+                ? (session_info.was_received_retry
+                   || session_info.batch_received_number
+                          == session_info.handshake_context.get_available_batch_number())
+                : (session_info.was_sent_retry
+                   || session_info.batch_sent_number
+                          == session_info.handshake_context
+                                 .get_available_batch_number())))
+        session_info.log.throw_exception<protocol_error>("Expected to rehandshake.");
 }
 noise::buffer_type<essu::header_data_size> essu::protocol::derive_header_obfs_key(
     typename noise_context_type::cipher_state &header_cipher_state) {

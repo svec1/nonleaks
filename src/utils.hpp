@@ -17,10 +17,6 @@
 #include <string_view>
 #include <utility>
 
-namespace std {
-using ssize_t = std::make_signed_t<std::size_t>;
-} // namespace std
-
 inline std::size_t get_now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
@@ -28,6 +24,7 @@ inline std::size_t get_now_ms() {
 }
 
 namespace noheap {
+using ssize_t = std::make_signed_t<std::size_t>;
 
 constexpr std::size_t output_buffer_size = 1024;
 
@@ -37,7 +34,12 @@ using rbyte = std::byte;
 
 template<typename T>
 concept Byte =
-    (std::same_as<T, byte> || std::same_as<T, ubyte> || std::same_as<T, rbyte>);
+    (std::same_as<std::decay_t<T>, byte> || std::same_as<std::decay_t<T>, ubyte>
+     || std::same_as<std::decay_t<T>, rbyte>);
+template<typename T>
+concept Char = std::same_as<std::decay_t<T>, char>;
+template<typename T>
+concept Byte_or_char = Byte<T> || Char<T>;
 
 template<typename T, std::size_t buffer_size>
 using buffer_type = std::array<T, buffer_size>;
@@ -53,13 +55,19 @@ concept Buffer =
 template<Buffer T>
 constexpr std::size_t buffer_size = std::tuple_size_v<std::decay_t<T>>;
 
-template<typename T>
-concept Buffer_chars = std::same_as<std::decay_t<T>, buffer_chars_type<buffer_size<T>>>;
+template<Buffer T>
+using buffer_value_type = typename std::decay_t<T>::value_type;
 
 template<typename T>
 concept Buffer_bytes =
     std::same_as<std::decay_t<T>,
                  buffer_bytes_type<buffer_size<T>, typename std::decay_t<T>::value_type>>;
+
+template<typename T>
+concept Buffer_chars = std::same_as<std::decay_t<T>, buffer_chars_type<buffer_size<T>>>;
+
+template<typename T>
+concept Buffer_bytes_or_chars = Buffer_bytes<T> || Buffer_chars<T>;
 
 template<Buffer TReturn, typename TSource>
     requires(buffer_size<TReturn> <= buffer_size<TSource>)
@@ -87,6 +95,15 @@ constexpr TReturn to_new_buffer(TSource &&buffer) {
 
     std::copy(begin, end, buffer_tmp.begin());
     return buffer_tmp;
+}
+template<Byte_or_char T, std::size_t size>
+constexpr buffer_type<T, size> to_buffer(std::string_view string) {
+    decltype(to_buffer<T, size>(string)) buffer_bytes{};
+
+    for (std::size_t i = 0; i < buffer_bytes.size() && i < string.size(); ++i)
+        buffer_bytes[i] = string[i];
+
+    return buffer_bytes;
 }
 
 template<Buffer_bytes TSource>
@@ -127,6 +144,11 @@ constexpr TReturn represent_bytes(TSource &&buffer) {
     return *reinterpret_cast<std::decay_t<TReturn> *>(&buffer);
 }
 
+template<Buffer TSource>
+std::span<buffer_value_type<TSource>> make_span(TSource &&buffer) {
+    return {buffer.data(), buffer.size()};
+}
+
 class print_impl final {
 public:
     static constexpr std::size_t buffer_size = output_buffer_size;
@@ -165,12 +187,8 @@ public:
     };
 
     static consteval owner_impl::buffer_type create_owner(std::string_view owner) {
-        owner_impl::buffer_type buffer_owner{};
-
-        for (std::size_t i = 0; i < owner_impl::buffer_size && i < owner.size(); ++i)
-            buffer_owner[i] = owner[i];
-
-        return buffer_owner;
+        return to_buffer<owner_impl::buffer_type::value_type, owner_impl::buffer_size>(
+            owner);
     };
 
     template<typename... Args>
@@ -196,14 +214,14 @@ public:
     }
 };
 
-class runtime_error final : public std::exception {
+class error : public std::exception {
 public:
     static constexpr std::size_t buffer_size = output_buffer_size;
     using buffer_type                        = buffer_chars_type<buffer_size>;
 
 public:
     template<typename... Args>
-    runtime_error(std::format_string<Args...> format, Args &&...args) {
+    error(std::format_string<Args...> format, Args &&...args) {
         if (format.get().size()) {
             auto end_it = std::format_to_n(buffer.begin(), buffer_size, format,
                                            std::forward<Args>(args)...);
@@ -211,18 +229,18 @@ public:
         }
     }
     template<typename... Args>
-    runtime_error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
-                  std::format_string<Args...>               format, Args &&...args)
-        : runtime_error(format, std::forward<Args>(args)...) {
+    error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
+          std::format_string<Args...>               format, Args &&...args)
+        : error(format, std::forward<Args>(args)...) {
         set_owner(_buffer_owner);
     }
-    runtime_error(buffer_type &&_buffer) : buffer(std::move(_buffer)) {}
-    runtime_error() = default;
-    runtime_error(const runtime_error &excp) {
+    error(buffer_type &&_buffer) : buffer(std::move(_buffer)) {}
+    error() = default;
+    error(const error &excp) {
         buffer = excp.buffer;
         set_owner(excp.buffer_owner);
     }
-    ~runtime_error() override = default;
+    ~error() override = default;
 
 public:
     void set_owner(log_impl::owner_impl::buffer_type _buffer_owner) {
@@ -242,8 +260,18 @@ private:
     bool owner_set;
 };
 
+class runtime_error : public error {
+public:
+    using error::error;
+};
+
+class logic_error : public error {
+public:
+    using error::error;
+};
+
 template<typename T>
-concept Derived_from_runtime_error = std::derived_from<T, runtime_error>;
+concept Derived_from_error = std::derived_from<T, error>;
 
 template<std::size_t _buffer_size>
 struct pseudoheap_monotonic_array;
@@ -275,7 +303,7 @@ protected:
         requires std::is_pointer<T>::value
     T malloc(std::size_t area_size) {
         if (offset + area_size >= this->buffer_size())
-            throw runtime_error("Pseudoheap is full. Last request: {}", area_size);
+            throw logic_error("Pseudoheap is full. Last request: {}", area_size);
 
         typename basic_array_type::value_type *ptr = this->array.buffer.data() + offset;
         offset += area_size;
@@ -284,7 +312,7 @@ protected:
 
     void free_last(std::size_t area_size) {
         if (area_size > offset)
-            throw runtime_error("Invalid area size: {}", area_size);
+            throw logic_error("Invalid area size: {}", area_size);
 
         offset -= area_size;
     }
@@ -323,7 +351,7 @@ public:
     constexpr monotonic_array() = default;
     monotonic_array(std::initializer_list<T> list) {
         if (list.size() >= monotonic_array::buffer_size)
-            throw runtime_error("Buffer overflow.");
+            throw logic_error("Buffer overflow.");
 
         for (const auto &it : list)
             this->push_back(it);
@@ -357,16 +385,16 @@ public:
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push_back(_T &&el) {
         if (count_pushed == this->buffer_size())
-            throw runtime_error("Buffer overflow.");
+            throw logic_error("Buffer overflow.");
         this->buffer[count_pushed++] = std::forward<_T>(el);
     }
     template<typename... Args>
         requires std::constructible_from<std::decay_t<T>, Args...>
     void emplace(iterator it, Args &&...args) {
         if (count_pushed == this->buffer_size())
-            throw runtime_error("Buffer overflow.");
+            throw logic_error("Buffer overflow.");
         else if (it >= this->buffer.end())
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
 
         for (auto it_tmp = this->end() - 2; it_tmp >= it; --it_tmp)
             std::swap(*it_tmp, *(it_tmp + 1));
@@ -376,7 +404,7 @@ public:
     }
     iterator erase(iterator it) {
         if (!count_pushed || it >= this->buffer.end())
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
 
         for (auto it_tmp = it; it_tmp < this->end(); ++it_tmp)
             std::swap(*it_tmp, *(it_tmp + 1));
@@ -387,13 +415,13 @@ public:
     }
     T pop_back() {
         if (count_pushed == 0)
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
 
         return this->buffer[--count_pushed];
     }
     T pop_front() {
         if (count_pushed == 0)
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
 
         typename monotonic_array::value_type tmp = std::move(this->buffer[0]);
 
@@ -411,12 +439,12 @@ public:
 
     T &at(std::size_t it) {
         if (it >= count_pushed)
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
         return this->operator[](it);
     }
     const T &at(std::size_t it) const {
         if (it >= count_pushed)
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
         return this->operator[](it);
     }
 
@@ -524,9 +552,9 @@ public:
     template<typename... Args>
     void emplace(iterator it, Args &&...args) {
         if (count_pushed == buffer_size())
-            throw runtime_error("Buffer overflow.");
-        if (size() && it > end())
-            throw runtime_error("Invalid access.");
+            throw logic_error("Buffer overflow.");
+        if (it > end())
+            throw logic_error("Invalid access.");
 
         this->template malloc<rbyte *>(sizeof(T));
 
@@ -551,7 +579,7 @@ public:
         requires std::same_as<std::decay_t<_T>, std::decay_t<T>>
     void push_back(_T &&el) {
         if (count_pushed == buffer_size())
-            throw runtime_error("Buffer overflow.");
+            throw logic_error("Buffer overflow.");
 
         decltype(auto) storage_p = this->template malloc<rbyte *>(sizeof(T));
         ::new (reinterpret_cast<void *>(storage_p)) T(std::forward<_T>(el));
@@ -564,7 +592,7 @@ public:
 
     void erase(iterator it) {
         if (!count_pushed || it == end())
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
 
         it->~T();
 
@@ -591,7 +619,7 @@ public:
     template<typename _T>
     decltype(auto) at(this _T &&_this, std::size_t it) {
         if (it >= _this.size())
-            throw runtime_error("Invalid access.");
+            throw logic_error("Invalid access.");
 
         return _this.operator[](it);
     }
@@ -628,7 +656,7 @@ public:
     template<typename _T>
         requires std::same_as<std::decay_t<_T>, element_type>
     void push(_T &&el, sequence_number_type sequence_number) {
-        std::ssize_t diff =
+        ssize_t diff =
             this->size()
                 ? sequence_number - std::get<sequence_number_index>(*(this->end() - 1))
                 : 1;
@@ -711,8 +739,8 @@ public:
                           std::span<std::size_t>                    _out_streams)
         : buffer_owner(_buffer_owner) {
         if (out_streams.size() > max_outstream_count)
-            throw noheap::runtime_error("The streams limit has been exceeded: {}.",
-                                        max_outstream_count);
+            throw noheap::logic_error("The streams limit has been exceeded: {}.",
+                                max_outstream_count);
         for (std::size_t i = 0; i < out_streams.size(); ++i)
             out_streams[i] = _out_streams[i];
     }
@@ -755,15 +783,13 @@ public:
         });
     }
 
-    template<noheap::Derived_from_runtime_error TExcp = noheap::runtime_error,
-             typename... Args>
+    template<noheap::Derived_from_error TExcp = noheap::runtime_error, typename... Args>
     [[noreturn]] void throw_exception(std::format_string<Args...> format,
                                       Args &&...args) const {
         throw TExcp(this->buffer_owner, format, std::forward<Args>(args)...);
     }
 
-    template<output_type                        async = output_type::flush,
-             noheap::Derived_from_runtime_error TExcp>
+    template<output_type async = output_type::flush, noheap::Derived_from_error TExcp>
     void exception_to_all(const TExcp &excp) const {
         std::for_each(out_streams.begin(), out_streams.end(), [&](std::size_t outstream) {
             if (!outstream)
@@ -844,8 +870,7 @@ public:
         log.to_all("<{}> {}", dynamic_owner.data(), buffer.data());
     }
 
-    template<noheap::Derived_from_runtime_error TExcp = noheap::runtime_error,
-             typename... Args>
+    template<noheap::Derived_from_error TExcp = noheap::runtime_error, typename... Args>
     [[noreturn]] void throw_exception(std::format_string<Args...> format,
                                       Args &&...args) const {
         noheap::print_impl::buffer_type buffer{};
@@ -854,7 +879,7 @@ public:
                                   std::forward<Args>(args)...)
                      .out;
 
-        log.throw_exception("<{}> {}", dynamic_owner.data(), buffer.data());
+        log.throw_exception<TExcp>("<{}> {}", dynamic_owner.data(), buffer.data());
     }
 
 private:
@@ -909,7 +934,7 @@ public:
 
             case std::future_status::deferred:
             default:
-                throw noheap::runtime_error("Invalid status of future object.");
+                throw noheap::logic_error("Invalid status of future object.");
         }
     }
 

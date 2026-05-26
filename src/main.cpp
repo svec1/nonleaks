@@ -1,5 +1,6 @@
 #include <fstream>
 
+#include "mldsa_native.hpp"
 #include "xxcore_service.hpp"
 
 using namespace boost;
@@ -8,7 +9,7 @@ using re  = noheap::runtime_error;
 
 constexpr log_handler log_main{{}};
 constexpr auto        name_config_file = "xxcore.json";
-constexpr auto usage_string = "Usage: xxcore [-k generate a new local keypair]";
+constexpr auto        usage_string = "Usage: xxcore [-k generate a new local keypair]";
 
 struct xxcore_config {
     std::string_view device;
@@ -122,6 +123,7 @@ void print_cfg(const xxcore_config &cfg) {
     log_main.to_console("    | Max session number: {}", essu::max_session_number);
     log_main.to_console("    | Noise pattern: {}",
                         std::string_view(nc_type::get_name_id()));
+    log_main.to_console("    | MLDSA type: {}", mldsa_native::mldsa_native_wrapper<noheap::buffer_bytes_type<1>{}>::type);
 }
 
 int main(int argc, char *argv[]) {
@@ -146,10 +148,10 @@ int main(int argc, char *argv[]) {
             service.run();
         }
 
-    } catch (noheap::runtime_error &excp) {
+    } catch (const noheap::runtime_error &excp) {
         log_main.exception_to_all(excp);
         return 1;
-    } catch (std::exception &excp) {
+    } catch (const std::exception &excp) {
         log_main.to_all("Program panic: {}.", excp.what());
         return 1;
     }

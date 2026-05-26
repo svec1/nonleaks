@@ -94,7 +94,7 @@ void xxcore_service::run() {
         });
 
         stream.get_action().set_config(std::move(config.local_config));
-        for (const auto &endpoint_config_pair : config.endpoint_config_s)
+        for (auto &endpoint_config_pair : config.endpoint_config_s)
             stream.get_action().register_session(endpoint_config_pair.second);
 
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);

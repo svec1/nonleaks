@@ -7,25 +7,28 @@
 
 namespace essu {
 
-constexpr std::size_t timeout_ms                     = 7000;
-constexpr std::size_t packet_size                    = 1376;
-constexpr std::size_t header_data_size               = 16;
-constexpr std::size_t min_random_bytes_number        = 64;
-constexpr std::size_t batch_units_number             = 4;
-constexpr std::size_t control_unit_number            = 3;
-constexpr std::size_t unit_per_rekey_number          = 17;
-constexpr std::size_t batch_window_number            = 256;
-constexpr std::size_t max_undecrypted_batch_number   = 16;
-constexpr std::size_t min_available_batch_number     = 1024;
-constexpr std::size_t max_available_batch_number     = std::uint16_t(-1);
+constexpr std::size_t timeout_ms                   = 7500;
+constexpr std::size_t keep_alive_ms                = 2500;
+constexpr std::size_t packet_size                  = 1376;
+constexpr std::size_t header_data_size             = 24;
+constexpr std::size_t min_random_bytes_number      = 32;
+constexpr std::size_t batch_units_number           = 4;
+constexpr std::size_t control_unit_number          = 3;
+constexpr std::size_t unit_per_rekey_number        = 6;
+constexpr std::size_t batch_window_number          = 256;
+constexpr std::size_t max_undecrypted_batch_number = 16;
+constexpr std::size_t min_available_batch_number   = 1024;
+constexpr std::size_t max_available_batch_number =
+    (std::uint32_t(-1) - 3) / batch_units_number;
 constexpr std::size_t max_available_handshake_number = std::uint16_t(-1);
 constexpr std::size_t max_session_number             = 4;
+constexpr std::size_t shared_value_number            = 7;
 constexpr std::size_t unit_size                      = packet_size / batch_units_number;
 constexpr std::size_t buffer_data_size               = unit_size - header_data_size;
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;
 
 static constexpr noise::noise_context_config<
-    noise::noise_pattern::XX_HFS, noise::ecdh_type::X25519, noise::ecdh_type::MLKEM768,
+    noise::noise_pattern::XX_HFS, noise::dh_type::X25519, noise::dh_type::MLKEM768,
     noise::cipher_type::XCHACHAPOLY, noise::hash_type::SHA3512>
     noise_config;
 using noise_context_type = noise::noise_context<noise_config>;
@@ -44,7 +47,8 @@ public:
     };
 
     struct header_data_type {
-        std::uint64_t  number;
+        std::uint64_t  shared_value;
+        std::uint32_t  number;
         std::uint32_t  key_iteration_number;
         unit_type_enum type;
         // Reserved
@@ -73,8 +77,24 @@ struct noise_handshake_context;
 struct session_info_type;
 struct protocol;
 using packet_type = network::packet_native_type<extention_payload_data_type>;
+using buffer_shared_value_s_type =
+    noheap::buffer_type<std::uint64_t, shared_value_number>;
+
 template<typename T>
 concept Packet_type = std::same_as<std::decay_t<T>, packet_type>;
+
+class base_error : public noheap::runtime_error {
+protected:
+    using runtime_error::runtime_error;
+};
+class protocol_error : public base_error {
+public:
+    using base_error::base_error;
+};
+class session_error : public base_error {
+public:
+    using base_error::base_error;
+};
 
 template<Packet_type T>
 inline decltype(auto) get_last_unit(T &&pckt) {
@@ -102,6 +122,12 @@ inline bool is_dummy_packet_type(const packet_type &pckt) {
             && pckt->units[1].header.type == pckt->units[2].header.type
             && pckt->units[2].header.type == pckt->units[3].header.type
             && pckt->units[3].header.type == unit_type::unit_type_enum::dummy);
+}
+inline bool is_posthandshake_packet(const packet_type &pckt) {
+    return get_control_unit(pckt).header.type == unit_type::unit_type_enum::dummy
+           && !is_control_session_unit_type(pckt->units[0].header.type)
+           && !is_control_session_unit_type(pckt->units[1].header.type)
+           && !is_control_session_unit_type(pckt->units[3].header.type);
 }
 inline void set_dummy_unit(unit_type &unit) {
     unit.header.type = unit_type::unit_type_enum::dummy;
