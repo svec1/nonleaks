@@ -509,8 +509,8 @@ public:
     public:
         using value_type      = T;
         using difference_type = std::ptrdiff_t;
-        using pointer         = T *;
-        using reference       = T &;
+        using pointer         = value_type *;
+        using reference       = value_type &;
 
     public:
         explicit iterator(monotonic_placement_new_array<T, _buffer_size> &_array,
@@ -529,20 +529,16 @@ public:
             ++(*this);
             return retval;
         }
-        decltype(auto) operator+(std::size_t _it) const {
-            return iterator(array, it + _it);
-        }
-        decltype(auto) operator-(std::size_t _it) const {
-            return iterator(array, it - _it);
-        }
+        decltype(auto) operator+(std::size_t _it) const { return iterator(array, it + _it); }
+        decltype(auto) operator-(std::size_t _it) const { return iterator(array, it - _it); }
         auto operator<=>(const iterator &other) const { return it <=> other.it; }
         bool operator==(const iterator &other) const { return it == other.it; }
-        decltype(auto) operator*() const { return array.get().at(it); }
-        decltype(auto) operator->() const { return &array.get().at(it); }
+        decltype(auto) operator*() { return array.get().at(it); }
+        decltype(auto) operator->() { return &array.get().at(it); }
 
     private:
         std::reference_wrapper<monotonic_placement_new_array<T, _buffer_size>> array;
-        std::size_t                                                            it;
+        std::size_t                             it;
     };
 
     iterator begin() { return iterator(*this, 0); }
@@ -740,7 +736,7 @@ public:
         : buffer_owner(_buffer_owner) {
         if (out_streams.size() > max_outstream_count)
             throw noheap::logic_error("The streams limit has been exceeded: {}.",
-                                max_outstream_count);
+                                      max_outstream_count);
         for (std::size_t i = 0; i < out_streams.size(); ++i)
             out_streams[i] = _out_streams[i];
     }

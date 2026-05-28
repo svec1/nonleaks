@@ -37,10 +37,10 @@ public:
     inline std::uint16_t                              get_available_batch_number() const;
     inline std::uint64_t                              get_handshake_id() const;
     inline const noise_context_type::buffer_key_type &get_remote_public_key() const;
+    inline typename noise_context_type::hash_state   &get_hash_state();
     inline typename noise_context_type::cipher_state &get_payload_cipher_state();
     inline typename noise_context_type::cipher_state &get_header_cipher_state_sender();
     inline typename noise_context_type::cipher_state &get_header_cipher_state_receiver();
-    inline typename noise_context_type::hash_state   &get_hash_state();
     inline typename noise_context_type::random_state &get_random_state();
 
     inline void start();

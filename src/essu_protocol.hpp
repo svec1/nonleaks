@@ -92,6 +92,9 @@ private:
                                                const packet_type       &pckt);
     static inline void check_protocol_compliance(const session_info_type &session_info,
                                                  bool                     receive);
+    static inline std::uint64_t derive_shared_value(
+        session_info_type                         &session_info,
+        typename noise_context_type::cipher_state &header_cipher_state);
     static inline noise::buffer_type<header_data_size> derive_header_obfs_key(
         typename noise_context_type::cipher_state &header_cipher_state);
 };
@@ -126,26 +129,15 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
     // Forces control-dummy and last unit to be dummy
     if (!is_control_session_packet_type(pckt))
         set_dummy_unit(get_control_unit(pckt));
-    set_dummy_unit(get_last_unit(pckt));
+    pckt.set_endpoint(session_info.remote_endpoint);
 
     for (std::uint64_t i = 0; i < pckt->units.size(); ++i) {
-        unit_type &unit = pckt->units[i];
+        decltype(auto) unit = pckt->units[i];
 
         // Sets some data of header
-        {
-            // Derives shared value
-            std::uint64_t shared_value;
-            std::memcpy(
-                &shared_value,
-                session_info.handshake_context.get_hash_state()
-                    .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
-                    .data(),
-                sizeof(shared_value));
-
-            unit.header.shared_value         = shared_value;
-            unit.header.number               = session_info.sender_unit_number++;
-            unit.header.key_iteration_number = session_info.sender_key_iteration_number;
-        }
+        unit.header.shared_value = derive_shared_value(session_info, header_cipher_state);
+        unit.header.number       = session_info.sender_unit_number++;
+        unit.header.key_iteration_number = session_info.sender_key_iteration_number;
 
         // Adds random padding
         {
@@ -200,12 +192,14 @@ void essu::protocol::prepare(packet_type &pckt, session_info_type &session_info)
         auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         // Adds header data obfuscation, without shared value
-        std::transform(
-            reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(std::uint64_t),
-            reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
-            obfs_key_tmp.data(),
-            reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(std::uint64_t),
-            std::bit_xor{});
+        std::transform(reinterpret_cast<noheap::rbyte *>(&unit.header)
+                           + sizeof(unit.header.shared_value),
+                       reinterpret_cast<noheap::rbyte *>(&unit.header)
+                           + sizeof(unit.header),
+                       obfs_key_tmp.data(),
+                       reinterpret_cast<noheap::rbyte *>(&unit.header)
+                           + sizeof(unit.header.shared_value),
+                       std::bit_xor{});
     }
 
     // Shuffles units in batch
@@ -231,32 +225,30 @@ void essu::protocol::handle(packet_type &pckt, session_info_type &session_info) 
     std::uint64_t possible_unit_number = session_info.receiver_unit_number;
     for (; possible_unit_number < available_units_window_number; ++possible_unit_number) {
         // Derives possible shared value
-        std::uint64_t possible_shared_value;
-        std::memcpy(
-            &possible_shared_value,
-            session_info.handshake_context.get_hash_state()
-                .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
-                .data(),
-            sizeof(possible_shared_value));
+        std::uint64_t possible_shared_value =
+            derive_shared_value(session_info, header_cipher_state);
 
         // Generates header obfuscation key based
-        auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
+        decltype(auto) obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         for (auto &unit : pckt->units) {
-            unit_type test_unit = unit;
+            // Checks open shared value
+            if (unit.header.shared_value != possible_shared_value)
+                continue;
+
+            auto test_unit = unit;
 
             // Deletes header data obfuscation, without shared value
             std::transform(reinterpret_cast<noheap::rbyte *>(&test_unit.header)
-                               + sizeof(std::uint64_t),
+                               + sizeof(test_unit.header.shared_value),
                            reinterpret_cast<noheap::rbyte *>(&test_unit.header)
                                + sizeof(test_unit.header),
                            obfs_key_tmp.data(),
                            reinterpret_cast<noheap::rbyte *>(&test_unit.header)
-                               + sizeof(std::uint64_t),
+                               + sizeof(test_unit.header.shared_value),
                            std::bit_xor{});
 
-            if (test_unit.header.shared_value != possible_shared_value
-                && test_unit.header.number != possible_unit_number)
+            if (test_unit.header.number != possible_unit_number)
                 continue;
 
             // Loop handling rekeys performed in the remote endpoint
@@ -374,18 +366,14 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
     std::uint64_t possible_unit_number = session_info.receiver_unit_number;
     for (; possible_unit_number < available_units_window_number; ++possible_unit_number) {
         // Derives possible shared value
-        std::uint64_t possible_shared_value;
-        std::memcpy(
-            &possible_shared_value,
-            session_info.handshake_context.get_hash_state()
-                .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
-                .data(),
-            sizeof(possible_shared_value));
+        std::uint64_t possible_shared_value =
+            derive_shared_value(session_info, header_cipher_state);
 
         // Generates header obfuscation key to increase encrypt nonce
         (void) derive_header_obfs_key(header_cipher_state);
 
         for (const auto &unit : pckt->units) {
+            // Checks open shared value
             if (unit.header.shared_value != possible_shared_value)
                 continue;
 
@@ -449,6 +437,18 @@ void essu::protocol::check_protocol_compliance(const session_info_type &session_
                           == session_info.handshake_context
                                  .get_available_batch_number())))
         session_info.log.throw_exception<protocol_error>("Expected to rehandshake.");
+}
+std::uint64_t essu::protocol::derive_shared_value(
+    session_info_type                         &session_info,
+    typename noise_context_type::cipher_state &header_cipher_state) {
+    std::uint64_t shared_value_tmp;
+    std::memcpy(&shared_value_tmp,
+                session_info.handshake_context.get_hash_state()
+                    .get_hash(noheap::make_span(header_cipher_state.get_encrypt_nonce()))
+                    .data(),
+                sizeof(shared_value_tmp));
+
+    return shared_value_tmp;
 }
 noise::buffer_type<essu::header_data_size> essu::protocol::derive_header_obfs_key(
     typename noise_context_type::cipher_state &header_cipher_state) {

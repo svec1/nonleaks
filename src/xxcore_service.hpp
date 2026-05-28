@@ -87,18 +87,52 @@ void xxcore_service::run() {
         worker = typename std::decay_t<decltype(worker)>{[this] { this->io.run(); }};
 
     {
-        udp_stream  stream(io, config.listen_port);
+        udp_stream  stream(io, config.listen_port, config.local_config);
         scope_guard session_stop([&] {
             io.stop();
             stream.close();
         });
 
-        stream.get_action().set_config(std::move(config.local_config));
-        for (auto &endpoint_config_pair : config.endpoint_config_s)
-            stream.get_action().register_session(endpoint_config_pair.second);
+        decltype(auto) act = stream.get_action();
+        for (auto &endpoint_config_pair : config.endpoint_config_s) {
+            act.add_endpoint_config(endpoint_config_pair.second);
+            act.register_session(endpoint_config_pair.second);
+        }
 
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
-        stream.get_action().run();
+
+        log.to_all("Start...");
+
+        // For testing: will be deleted
+        {
+            while (act.is_valid()) {
+                try {
+                    decltype(auto) session_list = act.get_session_list();
+                    for (decltype(auto) it = session_list.begin();
+                         it < session_list.end(); ++it) {
+                        decltype(auto) session_info = *it;
+
+                        act.handle(session_info);
+
+                        essu::packet_type pckt;
+                        essu::set_dummy_packet(pckt);
+                        act.push_packet({pckt, session_info});
+
+                        if (act.exist_received_packets())
+                            act.pop_packet();
+                    }
+
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                } catch (const essu::base_error &excp) {
+                    decltype(auto) session_info = excp.get_session_info();
+                    session_info.log.get_log_handler().to_all("{}", excp.what());
+                    act.remove_session(session_info);
+                }
+            }
+            throw act.get_error();
+        }
+
+        log.to_all("Stop.");
     }
 
     for (auto &worker : workers)

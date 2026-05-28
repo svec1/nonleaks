@@ -107,7 +107,7 @@ public:
     void init_packet(packet_type &pckt);
     void handle_packet(packet_type &&pckt);
     void set_error(const noheap::runtime_error &_excp);
-    bool is_running();
+    bool is_valid() const;
 };
 
 class network_error : public noheap::runtime_error {
@@ -130,7 +130,8 @@ public:
     using endpoint_type     = basic_socket_type::endpoint;
 
 public:
-    udp_stream(asio::io_context &io, asio::ip::port_type _port);
+    template<typename... Args>
+    udp_stream(asio::io_context &io, asio::ip::port_type _port, Args &&...args);
     udp_stream(udp_stream &&)      = delete;
     udp_stream(const udp_stream &) = delete;
 
@@ -170,8 +171,10 @@ private:
 };
 
 template<Derived_from_action Action>
-udp_stream<Action>::udp_stream(asio::io_context &io, port_type _port)
-    : socket_v4(io), socket_v6(io), port(_port), running(false) {
+template<typename... Args>
+udp_stream<Action>::udp_stream(asio::io_context &io, port_type _port, Args &&...args)
+    : act(std::forward<Args>(args)...), socket_v4(io), socket_v6(io), port(_port),
+      running(false) {
 }
 template<Derived_from_action Action>
 udp_stream<Action>::~udp_stream() {
@@ -256,21 +259,18 @@ void udp_stream<Action>::close() {
 template<Derived_from_action Action>
 void udp_stream<Action>::register_async_send() {
     std::lock_guard<std::mutex> m_lock(m);
-    if (!running || !act.is_running())
+    if (!running || !act.is_valid())
         return;
 
     asio::post(socket_v4.get_executor(), [this] {
-        if (!this->act.is_running())
-            return;
-
         try {
             // Performs init a packet base on TWrapper_packet protocol
             // NOTE: init_packet can wait
             typename action_type::packet_type pckt{};
             this->act.init_packet(pckt);
 
-			if(pckt.get_endpoint().address == buffer_address_type{})
-				return;
+            if (pckt.get_endpoint().address == buffer_address_type{})
+                return;
 
             // Sends the packet
             {
@@ -301,11 +301,11 @@ void udp_stream<Action>::register_async_send() {
 template<Derived_from_action Action>
 void udp_stream<Action>::register_async_receive(ipv v) {
     std::lock_guard<std::mutex> m_lock(m);
-    if (!running || !act.is_running())
+    if (!running || !act.is_valid())
         return;
 
     const auto handler = [this, v](system::error_code ec, std::size_t) {
-        if (!this->act.is_running())
+        if (!this->act.is_valid())
             return;
 
         try {

@@ -36,7 +36,7 @@ using noise_context_type = noise::noise_context<noise_config>;
 // Transport unit
 struct unit_type {
 public:
-    enum class unit_type_enum : std::uint8_t {
+    enum class unit_type_enum : std::uint64_t {
         session_request = 0,
         session_created,
         session_confirmed,
@@ -48,13 +48,9 @@ public:
 
     struct header_data_type {
         std::uint64_t  shared_value;
+        unit_type_enum type;
         std::uint32_t  number;
         std::uint32_t  key_iteration_number;
-        unit_type_enum type;
-        // Reserved
-        std::uint8_t byte1;
-        std::uint8_t byte2;
-        std::uint8_t byte3;
     };
 
 public:
@@ -75,6 +71,7 @@ struct extention_payload_data_type {
 };
 struct noise_handshake_context;
 struct session_info_type;
+struct session_info_type_extended;
 struct protocol;
 using packet_type = network::packet_native_type<extention_payload_data_type>;
 using buffer_shared_value_s_type =
@@ -86,6 +83,21 @@ concept Packet_type = std::same_as<std::decay_t<T>, packet_type>;
 class base_error : public noheap::runtime_error {
 protected:
     using runtime_error::runtime_error;
+
+public:
+    void set_session_info(const session_info_type_extended &_session_info) {
+        session_info_r = _session_info;
+    }
+    const session_info_type_extended &get_session_info() const {
+        if (!session_info_r.has_value())
+            throw noheap::logic_error("Failed to get session info.");
+
+        return session_info_r.value();
+    }
+
+private:
+    std::optional<std::reference_wrapper<const session_info_type_extended>>
+        session_info_r = std::nullopt;
 };
 class protocol_error : public base_error {
 public:
@@ -133,7 +145,7 @@ inline bool is_posthandshake_packet(const packet_type &pckt) {
     return get_control_unit(pckt).header.type == unit_type::unit_type_enum::dummy
            && !is_control_session_unit_type(pckt->units[0].header.type)
            && !is_control_session_unit_type(pckt->units[1].header.type)
-           && !is_control_session_unit_type(pckt->units[3].header.type);
+           && pckt->units[3].header.type == unit_type::unit_type_enum::dummy;
 }
 inline void set_dummy_unit(unit_type &unit) {
     unit.header.type = unit_type::unit_type_enum::dummy;
