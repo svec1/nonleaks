@@ -16,7 +16,6 @@ constexpr std::size_t batch_units_number           = 4;
 constexpr std::size_t control_unit_number          = 3;
 constexpr std::size_t unit_per_rekey_number        = 6;
 constexpr std::size_t batch_window_number          = 256;
-constexpr std::size_t max_undecrypted_batch_number = 16;
 constexpr std::size_t min_available_batch_number   = 1024;
 constexpr std::size_t max_available_batch_number =
     (std::uint32_t(-1) - 3) / batch_units_number;
@@ -47,7 +46,7 @@ public:
     };
 
     struct header_data_type {
-        std::uint64_t  shared_value;
+        std::uint64_t  connection_id;
         unit_type_enum type;
         std::uint32_t  number;
         std::uint32_t  key_iteration_number;

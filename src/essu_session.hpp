@@ -92,6 +92,7 @@ public:
 private:
     inline void add_endpoint_config_internal(const endpoint_config_type &endpoint_config);
     inline void register_session_internal(const endpoint_config_type &endpoint_config);
+    inline void handle_internal(const session_info_type_extended &_session_info);
     inline void handle_runtime_error(const noheap::runtime_error &_excp);
     inline buffer_session_s_type::iterator
         get_session_info(const session_info_type &session_info);
@@ -116,7 +117,8 @@ private:
 
 } // namespace essu
 
-void essu::session_handler::add_endpoint_config(const endpoint_config_type &endpoint_config) {
+void essu::session_handler::add_endpoint_config(
+    const endpoint_config_type &endpoint_config) {
     std::lock_guard<std::mutex> m_run_lock(m_run);
     add_endpoint_config_internal(endpoint_config);
 }
@@ -146,34 +148,7 @@ void essu::session_handler::handle(const session_info_type_extended &_session_in
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
     if (failed_io)
         return;
-
-    try {
-        // Locks run_m and performs loop
-        scope_guard sc([this] { this->cv_io.notify_all(); });
-        std::size_t now_ms = get_now_ms();
-
-        decltype(auto) session_info   = *get_session_info(_session_info);
-        decltype(auto) session_status = protocol::update_status(session_info);
-
-        // Tries to control session and handles possible errors
-        if (now_ms - session_info.last_received_ms >= timeout_ms)
-            session_info.log.throw_exception<session_error>("Timeout has been reached.");
-
-        // If status of session is START or STOP:
-        if (session_status == session_info_type::status_enum::START) {
-            protocol::start_handshake(session_info);
-            session_info.log.to_all("Performing handshake...");
-        } else if (session_status == session_info_type::status_enum::STOP) {
-            protocol::stop_handshake(session_info);
-            session_info.log.to_all("Handshake completed.");
-        }
-    } catch (base_error &_excp) {
-        _excp.set_session_info(_session_info);
-        throw;
-    } catch (const noheap::runtime_error &_excp) {
-        handle_runtime_error(_excp);
-        throw;
-    }
+    handle_internal(_session_info);
 }
 noheap::runtime_error essu::session_handler::get_error() const {
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
@@ -184,7 +159,7 @@ void essu::session_handler::push_packet(packet_type_extended &&pckt) {
 
     // Prepares the packet
     try {
-        protocol::prepare(pckt, pckt.session_info_r);
+        protocol::prepare(pckt.session_info_r, pckt);
     } catch (base_error &_excp) {
         _excp.set_session_info(pckt.session_info_r);
         throw;
@@ -233,11 +208,12 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
             register_session_internal(config_tmp);
         }
         session_info_it = session_s.end() - 1;
+        handle_internal(*session_info_it);
     }
 
     // Handles the packet
     try {
-        protocol::handle(pckt, *session_info_it);
+        protocol::handle(*session_info_it, pckt);
     } catch (base_error &_excp) {
         _excp.set_session_info(*session_info_it);
         throw;
@@ -306,6 +282,36 @@ void essu::session_handler::register_session_internal(
     session_s.emplace_back(log, endpoint_config_r.endpoint, endpoint_config_r.local_role,
                            config.ext, endpoint_config_r.public_key,
                            endpoint_config_r.pre_shared_key, config.keypair);
+}
+void essu::session_handler::handle_internal(
+    const session_info_type_extended &_session_info) {
+    try {
+        // Locks run_m and performs loop
+        scope_guard sc([this] { this->cv_io.notify_all(); });
+        std::size_t now_ms = get_now_ms();
+
+        decltype(auto) session_info   = *get_session_info(_session_info);
+        decltype(auto) session_status = protocol::update_status(session_info);
+
+        // Tries to control session and handles possible errors
+        if (now_ms - session_info.last_received_ms >= timeout_ms)
+            session_info.log.throw_exception<session_error>("Timeout has been reached.");
+
+        // If status of session is START or STOP:
+        if (session_status == session_info_type::status_enum::START) {
+            protocol::start_handshake(session_info);
+            session_info.log.to_all("Performing handshake...");
+        } else if (session_status == session_info_type::status_enum::STOP) {
+            protocol::stop_handshake(session_info);
+            session_info.log.to_all("Handshake completed.");
+        }
+    } catch (base_error &_excp) {
+        _excp.set_session_info(_session_info);
+        throw;
+    } catch (const noheap::runtime_error &_excp) {
+        handle_runtime_error(_excp);
+        throw;
+    }
 }
 
 void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
