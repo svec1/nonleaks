@@ -96,7 +96,7 @@ void xxcore_service::run() {
         decltype(auto) act = stream.get_action();
         for (auto &endpoint_config_pair : config.endpoint_config_s) {
             act.add_endpoint_config(endpoint_config_pair.second);
-            act.register_session(endpoint_config_pair.second);
+            act.add_session(endpoint_config_pair.second);
         }
 
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
@@ -112,8 +112,6 @@ void xxcore_service::run() {
                          it < session_list.end(); ++it) {
                         decltype(auto) session_info = *it;
 
-                        act.handle(session_info);
-
                         essu::packet_type pckt;
                         essu::set_dummy_packet(pckt);
                         act.push_packet({pckt, session_info});
@@ -125,7 +123,7 @@ void xxcore_service::run() {
                 } catch (const essu::base_error &excp) {
                     decltype(auto) session_info = excp.get_session_info();
                     session_info.log.get_log_handler().to_all("{}", excp.what());
-                    act.remove_session(session_info);
+                    act.delete_session(session_info);
                 }
             }
             throw act.get_error();

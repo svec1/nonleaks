@@ -124,7 +124,7 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
 
     // Forces control and last unit to be dummy
     if (!is_control_session_packet_type(pckt))
-        set_dummy_unit(get_control_unit(pckt));
+        get_control_unit(pckt).header.type = unit_type::unit_type_enum::dummy;
     pckt.set_endpoint(session_info.remote_endpoint);
 
     for (std::size_t i = 0; i < pckt->units.size(); ++i) {
@@ -181,14 +181,11 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
             }
         }
 
-        // Generates header obfuscation key based on the unit_number
-        auto obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
-
-        // Adds header data obfuscation, without shared value
+        // Adds header data obfuscation
         std::transform(reinterpret_cast<noheap::rbyte *>(&unit.header),
                        reinterpret_cast<noheap::rbyte *>(&unit.header)
                            + sizeof(unit.header),
-                       obfs_key_tmp.data(),
+                       derive_header_obfs_key(header_cipher_state).data(),
                        reinterpret_cast<noheap::rbyte *>(&unit.header), std::bit_xor{});
     }
 
@@ -209,6 +206,7 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
 
     try {
         // Selects possible unit number
+        std::uint64_t decrypted_units_number = 0;
         std::uint64_t available_units_window_number =
             session_info.receiver_unit_number + batch_units_number;
         for (; session_info.receiver_unit_number < available_units_window_number;
@@ -217,18 +215,24 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
             decltype(auto) obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
             for (auto &unit : pckt->units) {
-                // Deletes header data obfuscation
-                std::transform(
-                    reinterpret_cast<noheap::rbyte *>(&unit.header),
-                    reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
-                    obfs_key_tmp.data(), reinterpret_cast<noheap::rbyte *>(&unit.header),
-                    std::bit_xor{});
+                {
+                    auto test_header = unit.header;
 
-                if (unit.header.connection_id
-                        != session_info.handshake_context.get_handshake_id()
-                    || unit.header.number != session_info.receiver_unit_number)
-                    session_info.log.throw_exception<protocol_error>(
-                        "Invalid header unit.");
+                    // Deletes header data obfuscation
+                    std::transform(reinterpret_cast<noheap::rbyte *>(&test_header),
+                                   reinterpret_cast<noheap::rbyte *>(&test_header)
+                                       + sizeof(test_header),
+                                   obfs_key_tmp.data(),
+                                   reinterpret_cast<noheap::rbyte *>(&test_header),
+                                   std::bit_xor{});
+
+                    if (test_header.connection_id
+                            != session_info.handshake_context.get_handshake_id()
+                        || test_header.number != session_info.receiver_unit_number)
+                        continue;
+
+                    unit.header = test_header;
+                }
 
                 // Tries to decrypt buffer data
                 if (session_handshake_complete) {
@@ -249,12 +253,16 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
                     }
                 }
 
+                ++decrypted_units_number;
                 break;
             }
         }
+
+        if (decrypted_units_number != batch_units_number)
+            session_info.log.throw_exception<protocol_error>("Invalid header of units.");
     } catch (const protocol_error &excp) {
         session_info.log.throw_exception<protocol_error>(
-            "Failed to decrypt last batches: {}", excp.what());
+            "Failed to decrypt last batch: {}", excp.what());
     }
 
     // Restores order of units in batch
@@ -264,8 +272,6 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
               });
 
     check_packet_compliance(session_info, pckt);
-
-    session_info.receiver_unit_number += batch_units_number;
     ++session_info.batch_received_number;
 
     // If available batch number is reached
@@ -308,6 +314,7 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
         session_info.handshake_context.get_payload_cipher_state();
     decltype(auto) header_cipher_state =
         session_info.handshake_context.get_header_cipher_state_receiver();
+    bool session_handshake_complete = session_info.handshake_context.is_complete();
 
     std::uint64_t count_suitable_units = 0;
     std::uint64_t available_units_window_number =
@@ -318,19 +325,18 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
         decltype(auto) obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
         for (const auto &unit : pckt->units) {
-            auto test_unit = unit;
+            auto test_header = unit.header;
 
             // Deletes header data obfuscation, without shared value
-            std::transform(reinterpret_cast<noheap::rbyte *>(&test_unit.header),
-                           reinterpret_cast<noheap::rbyte *>(&test_unit.header)
-                               + sizeof(test_unit.header),
-                           obfs_key_tmp.data(),
-                           reinterpret_cast<noheap::rbyte *>(&test_unit.header),
-                           std::bit_xor{});
+            std::transform(
+                reinterpret_cast<noheap::rbyte *>(&test_header),
+                reinterpret_cast<noheap::rbyte *>(&test_header) + sizeof(test_header),
+                obfs_key_tmp.data(), reinterpret_cast<noheap::rbyte *>(&test_header),
+                std::bit_xor{});
 
-            if (test_unit.header.connection_id
+            if (test_header.connection_id
                     != session_info.handshake_context.get_handshake_id()
-                || test_unit.header.number != possible_unit_number)
+                || test_header.number != possible_unit_number)
                 continue;
 
             ++count_suitable_units;
@@ -341,14 +347,15 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
             break;
     }
 
-    if (count_suitable_units == pckt->units.size()) {
+    if (count_suitable_units > 0) {
         std::uint64_t min_unit_number = ((possible_unit_number - batch_units_number + 1)
                                          - session_info.receiver_unit_number);
-        payload_cipher_state.set_decrypt_counter_block(
-            payload_cipher_state.get_decrypt_counter_block() + min_unit_number);
+        if (session_handshake_complete)
+            payload_cipher_state.set_decrypt_counter_block(
+                payload_cipher_state.get_decrypt_counter_block() + min_unit_number);
         header_cipher_state.set_encrypt_counter_block(
             header_cipher_state.get_encrypt_counter_block() - batch_units_number);
-        session_info.receiver_unit_number = min_unit_number;
+        session_info.receiver_unit_number += min_unit_number;
         return true;
     }
 

@@ -40,7 +40,7 @@ class session_handler : public network::action<packet_type> {
 
 public:
     struct packet_type_extended : public packet_type {
-        session_info_type_extended &session_info_r;
+        std::optional<std::reference_wrapper<session_info_type_extended>> session_info_r;
     };
 
 private:
@@ -73,10 +73,9 @@ public:
 
 public:
     inline void add_endpoint_config(const endpoint_config_type &endpoint_config);
-    inline void register_session(const endpoint_config_type &endpoint_config);
-    inline void remove_session(const session_info_type_extended &_session_info);
+    inline void add_session(const endpoint_config_type &endpoint_config);
+    inline void delete_session(const session_info_type_extended &_session_info);
     inline buffer_session_s_type &get_session_list();
-    inline void                   handle(const session_info_type_extended &_session_info);
     inline noheap::runtime_error  get_error() const;
 
     inline void                 push_packet(packet_type_extended &&pckt);
@@ -91,8 +90,8 @@ public:
 
 private:
     inline void add_endpoint_config_internal(const endpoint_config_type &endpoint_config);
-    inline void register_session_internal(const endpoint_config_type &endpoint_config);
-    inline void handle_internal(const session_info_type_extended &_session_info);
+    inline void add_session_internal(const endpoint_config_type &endpoint_config);
+    inline void handle_session(const session_info_type_extended &_session_info);
     inline void handle_runtime_error(const noheap::runtime_error &_excp);
     inline buffer_session_s_type::iterator
         get_session_info(const session_info_type &session_info);
@@ -117,51 +116,53 @@ private:
 
 } // namespace essu
 
+// Adds the passed endpoint config to internal buffer of endpoint configs
 void essu::session_handler::add_endpoint_config(
     const endpoint_config_type &endpoint_config) {
     std::lock_guard<std::mutex> m_run_lock(m_run);
     add_endpoint_config_internal(endpoint_config);
 }
-void essu::session_handler::register_session(
-    const endpoint_config_type &endpoint_config) {
-    std::lock_guard<std::mutex> m_run_lock(m_run);
-    register_session_internal(endpoint_config);
-
+// Adds a new session based on endpoint_config to internal buffer of sessions
+void essu::session_handler::add_session(const endpoint_config_type &endpoint_config) {
     log.to_all("Session registered: {}",
                std::string_view(session_s[session_s.size() - 1].string_remote_address));
+
+    std::lock_guard<std::mutex> m_run_lock(m_run);
+    add_session_internal(endpoint_config);
 }
-void essu::session_handler::remove_session(
+// Delete the passed session from internal buffer of sessions
+void essu::session_handler::delete_session(
     const session_info_type_extended &_session_info) {
+    log.to_all("Session removed: {}",
+               std::string_view(_session_info.string_remote_address));
+
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
     decltype(auto)                   session_info = get_session_info(_session_info);
-
-    log.to_all("Session removed: {}",
-               std::string_view(session_info->string_remote_address));
-
     session_s.erase(session_info);
 }
+// Returns an internal buffer of sessions
 essu::session_handler::buffer_session_s_type &essu::session_handler::get_session_list() {
     return session_s;
 }
-
-void essu::session_handler::handle(const session_info_type_extended &_session_info) {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
-    if (failed_io)
-        return;
-    handle_internal(_session_info);
-}
+// Returns a last error
 noheap::runtime_error essu::session_handler::get_error() const {
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
     return excp;
 }
+// Pushes packet to internal send buffer of packets
 void essu::session_handler::push_packet(packet_type_extended &&pckt) {
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
 
+    if (!pckt.session_info_r.has_value())
+        log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
+    decltype(auto) session_info = pckt.session_info_r.value();
+
     // Prepares the packet
     try {
-        protocol::prepare(pckt.session_info_r, pckt);
+        handle_session(session_info);
+        protocol::prepare(session_info, pckt);
     } catch (base_error &_excp) {
-        _excp.set_session_info(pckt.session_info_r);
+        _excp.set_session_info(session_info);
         throw;
     }
     send_buffer.push_back(pckt);
@@ -169,6 +170,7 @@ void essu::session_handler::push_packet(packet_type_extended &&pckt) {
     // Sets current session for possible work
     cv_io.notify_one();
 }
+// Returns packet from internal receive buffer of packets
 essu::session_handler::packet_type_extended essu::session_handler::pop_packet() {
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
 
@@ -197,7 +199,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
             });
 
         if (it != buffer_endpoint_config_s.end()) {
-            register_session_internal(*it);
+            add_session_internal(*it);
         } else {
             static endpoint_config_type config_tmp = {
                 {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
@@ -205,14 +207,18 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
                 {},
                 {}};
             add_endpoint_config_internal(config_tmp);
-            register_session_internal(config_tmp);
+            add_session_internal(config_tmp);
         }
         session_info_it = session_s.end() - 1;
-        handle_internal(*session_info_it);
+        if (!protocol::check_affiliation_packet(*session_info_it, pckt)) {
+            session_info_it->log.to_all("Invalid packet.");
+            return {pckt, std::nullopt};
+        }
     }
 
     // Handles the packet
     try {
+        handle_session(*session_info_it);
         protocol::handle(*session_info_it, pckt);
     } catch (base_error &_excp) {
         _excp.set_session_info(*session_info_it);
@@ -228,10 +234,7 @@ bool essu::session_handler::exist_received_packets() const {
     std::lock_guard<decltype(m_run)> m_run_lock(m_run);
     return receive_buffer.size();
 }
-bool essu::session_handler::is_valid() const {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
-    return !failed_io;
-}
+
 void essu::session_handler::init_packet(packet_type &pckt) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
@@ -255,6 +258,16 @@ void essu::session_handler::handle_packet(packet_type &&pckt) {
 
     receive_buffer.push_back(pckt);
 }
+void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
+    handle_runtime_error(_excp);
+    cv_io.notify_one();
+}
+bool essu::session_handler::is_valid() const {
+    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+    return !failed_io;
+}
+
 void essu::session_handler::add_endpoint_config_internal(
     const endpoint_config_type &endpoint_config) {
     if (buffer_endpoint_config_s.size() == max_session_number)
@@ -264,7 +277,7 @@ void essu::session_handler::add_endpoint_config_internal(
     buffer_endpoint_config_s.push_back(
         std::reference_wrapper<const endpoint_config_type>(endpoint_config));
 }
-void essu::session_handler::register_session_internal(
+void essu::session_handler::add_session_internal(
     const endpoint_config_type &endpoint_config) {
     if (session_s.size() == max_session_number)
         log.throw_exception<session_error>("Failed to register session.");
@@ -283,42 +296,28 @@ void essu::session_handler::register_session_internal(
                            config.ext, endpoint_config_r.public_key,
                            endpoint_config_r.pre_shared_key, config.keypair);
 }
-void essu::session_handler::handle_internal(
+void essu::session_handler::handle_session(
     const session_info_type_extended &_session_info) {
-    try {
-        // Locks run_m and performs loop
-        scope_guard sc([this] { this->cv_io.notify_all(); });
-        std::size_t now_ms = get_now_ms();
+    scope_guard sc([this] { this->cv_io.notify_all(); });
+    std::size_t now_ms = get_now_ms();
 
-        decltype(auto) session_info   = *get_session_info(_session_info);
-        decltype(auto) session_status = protocol::update_status(session_info);
+    decltype(auto) session_info   = *get_session_info(_session_info);
+    decltype(auto) session_status = protocol::update_status(session_info);
 
-        // Tries to control session and handles possible errors
-        if (now_ms - session_info.last_received_ms >= timeout_ms)
-            session_info.log.throw_exception<session_error>("Timeout has been reached.");
+    // Tries to control session and handles possible errors
+    if (now_ms - session_info.last_received_ms >= timeout_ms)
+        session_info.log.throw_exception<session_error>("Timeout has been reached.");
 
-        // If status of session is START or STOP:
-        if (session_status == session_info_type::status_enum::START) {
-            protocol::start_handshake(session_info);
-            session_info.log.to_all("Performing handshake...");
-        } else if (session_status == session_info_type::status_enum::STOP) {
-            protocol::stop_handshake(session_info);
-            session_info.log.to_all("Handshake completed.");
-        }
-    } catch (base_error &_excp) {
-        _excp.set_session_info(_session_info);
-        throw;
-    } catch (const noheap::runtime_error &_excp) {
-        handle_runtime_error(_excp);
-        throw;
+    // If status of session is START or STOP:
+    if (session_status == session_info_type::status_enum::START) {
+        protocol::start_handshake(session_info);
+        session_info.log.to_all("Performing handshake...");
+    } else if (session_status == session_info_type::status_enum::STOP) {
+        protocol::stop_handshake(session_info);
+        session_info.log.to_all("Handshake completed.");
     }
 }
 
-void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
-    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
-    handle_runtime_error(_excp);
-    cv_io.notify_one();
-}
 void essu::session_handler::handle_runtime_error(const noheap::runtime_error &_excp) {
     excp      = _excp;
     failed_io = true;

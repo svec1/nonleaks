@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.2 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 
 option(XXCORE_SNDIO "Use sndio audio interface." OFF)
 option(XXCORE_NOTUSE_AUDIO "Do not use audio class." OFF)

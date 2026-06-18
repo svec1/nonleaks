@@ -7,16 +7,16 @@
 
 namespace essu {
 
-constexpr std::size_t timeout_ms                   = 7500;
-constexpr std::size_t keep_alive_ms                = 2500;
-constexpr std::size_t packet_size                  = 1376;
-constexpr std::size_t header_data_size             = 24;
-constexpr std::size_t min_random_bytes_number      = 32;
-constexpr std::size_t batch_units_number           = 4;
-constexpr std::size_t control_unit_number          = 3;
-constexpr std::size_t unit_per_rekey_number        = 6;
-constexpr std::size_t batch_window_number          = 256;
-constexpr std::size_t min_available_batch_number   = 1024;
+constexpr std::size_t timeout_ms                 = 7500;
+constexpr std::size_t keep_alive_ms              = 2500;
+constexpr std::size_t packet_size                = 1376;
+constexpr std::size_t header_data_size           = 24;
+constexpr std::size_t min_random_bytes_number    = 32;
+constexpr std::size_t batch_units_number         = 4;
+constexpr std::size_t control_unit_number        = 3;
+constexpr std::size_t unit_per_rekey_number      = 6;
+constexpr std::size_t batch_window_number        = 256;
+constexpr std::size_t min_available_batch_number = 1024;
 constexpr std::size_t max_available_batch_number =
     (std::uint32_t(-1) - 3) / batch_units_number;
 constexpr std::size_t max_available_handshake_number = std::uint16_t(-1);
@@ -146,24 +146,15 @@ inline bool is_posthandshake_packet(const packet_type &pckt) {
            && !is_control_session_unit_type(pckt->units[1].header.type)
            && pckt->units[3].header.type == unit_type::unit_type_enum::dummy;
 }
-inline void set_dummy_unit(unit_type &unit) {
-    unit.header.type = unit_type::unit_type_enum::dummy;
-}
-inline void set_control_session_unit(unit_type &unit, unit_type::unit_type_enum type) {
-    if (!is_control_session_unit_type(type))
-        return;
-    unit.header.type = type;
-}
 inline void set_control_session_packet(packet_type              &pckt,
                                        unit_type::unit_type_enum type) {
     if (!is_control_session_unit_type(type))
         return;
-    set_control_session_unit(get_control_unit(pckt), type);
+    get_control_unit(pckt).header.type = type;
 }
 inline void set_dummy_packet(packet_type &pckt) {
-    pckt->units = {};
     for (decltype(auto) unit : pckt->units)
-        set_dummy_unit(unit);
+        unit.header.type = unit_type::unit_type_enum::dummy;
 }
 
 } // namespace essu
