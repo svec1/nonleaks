@@ -8,7 +8,7 @@ namespace essu {
 
 // Session info corresponding to an individual node
 struct session_info_type {
-    friend struct protocol;
+    friend class protocol;
 
     enum class status_enum : std::size_t {
         START = 0,
@@ -67,7 +67,7 @@ private:
     bool          was_received_retry;
 };
 
-struct protocol final {
+class protocol final {
     protocol() = delete;
 
 public:

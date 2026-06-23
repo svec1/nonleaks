@@ -21,7 +21,6 @@ constexpr std::size_t max_available_batch_number =
     (std::uint32_t(-1) - 3) / batch_units_number;
 constexpr std::size_t max_available_handshake_number = std::uint16_t(-1);
 constexpr std::size_t max_session_number             = 4;
-constexpr std::size_t shared_value_number            = 7;
 constexpr std::size_t unit_size                      = packet_size / batch_units_number;
 constexpr std::size_t buffer_data_size               = unit_size - header_data_size;
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;
@@ -71,10 +70,11 @@ struct extention_payload_data_type {
 struct noise_handshake_context;
 struct session_info_type;
 struct session_info_type_extended;
-struct protocol;
+class protocol;
+class session_handler;
 using packet_type = network::packet_native_type<extention_payload_data_type>;
-using buffer_shared_value_s_type =
-    noheap::buffer_type<std::uint64_t, shared_value_number>;
+using session_info_proxy_type =
+    std::optional<std::reference_wrapper<session_info_type_extended>>;
 
 template<typename T>
 concept Packet_type = std::same_as<std::decay_t<T>, packet_type>;
@@ -84,19 +84,18 @@ protected:
     using runtime_error::runtime_error;
 
 public:
-    void set_session_info(const session_info_type_extended &_session_info) {
-        session_info_r = _session_info;
+    void set_session_info(session_info_proxy_type _session_info) {
+        session_info = _session_info;
     }
-    const session_info_type_extended &get_session_info() const {
-        if (!session_info_r.has_value())
+    decltype(auto) get_session_info() const {
+        if (!session_info.has_value())
             throw noheap::logic_error("Failed to get session info.");
 
-        return session_info_r.value();
+        return session_info.value();
     }
 
 private:
-    std::optional<std::reference_wrapper<const session_info_type_extended>>
-        session_info_r = std::nullopt;
+    session_info_proxy_type session_info = std::nullopt;
 };
 class protocol_error : public base_error {
 public:

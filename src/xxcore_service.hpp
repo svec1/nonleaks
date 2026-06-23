@@ -120,8 +120,8 @@ void xxcore_service::run() {
                         act.pop_packet();
 
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                } catch (const essu::base_error &excp) {
-                    decltype(auto) session_info = excp.get_session_info();
+                } catch (essu::base_error &excp) {
+                    decltype(auto) session_info = excp.get_session_info().get();
                     session_info.log.get_log_handler().to_all("{}", excp.what());
                     act.delete_session(session_info);
                 }
