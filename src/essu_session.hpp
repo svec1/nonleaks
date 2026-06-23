@@ -8,31 +8,22 @@
 namespace essu {
 using namespace boost;
 
-struct session_info_type_extended : private session_info_type {
+struct session_info_type_extended : public session_info_type {
     friend class session_handler;
 
-private:
+public:
     session_info_type_extended(
-        const log_handler &_log_handler, network::native_endpoint _remote_endpoint,
-        noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
+        network::native_endpoint _remote_endpoint, noise::noise_role _role,
+        noise::buffer_prologue_extention_type      _ext,
         const noise_context_type::buffer_key_type &_remote_public_key,
         const noise::buffer_pre_shared_key_type   &_pre_shared_key,
         const noise_context_type::keypair_type    &_local_keypair)
-        : session_info_type(log, _remote_endpoint, _role, _ext, _remote_public_key,
+        : session_info_type(_remote_endpoint, _role, _ext, _remote_public_key,
                             _pre_shared_key, _local_keypair),
-          string_remote_address(network::utils::bytes_address_to_string(
-              remote_endpoint.address, remote_endpoint.v)),
-          dynamic_owner(noheap::to_new_buffer<noheap::log_impl::owner_impl::buffer_type>(
-              string_remote_address)),
-          last_received_ms(get_now_ms()), log(_log_handler, dynamic_owner) {}
+          last_received_ms(get_now_ms()) {}
 
 private:
-    const network::buffer_string_address_type       string_remote_address;
-    const noheap::log_impl::owner_impl::buffer_type dynamic_owner;
-    std::size_t                                     last_received_ms;
-
-public:
-    const log_proxy log;
+    std::size_t last_received_ms;
 };
 
 class session_handler : public network::action<packet_type> {
@@ -172,10 +163,8 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     // Finds suitable session by packet
     for (decltype(auto) it = session_s.begin(); it < session_s.end(); ++it) {
         if (protocol::check_affiliation_packet(*it, pckt)) {
-            it->remote_endpoint  = remote_endpoint;
-            it->last_received_ms = get_now_ms();
-            session_info_it      = it;
-            is_exist             = true;
+            session_info_it = it;
+            is_exist        = true;
             break;
         }
     }
@@ -206,7 +195,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     try {
         handle_session(*session_info_it);
         if (!is_exist && !protocol::check_affiliation_packet(*session_info_it, pckt)) {
-            session_info_it->log.to_all("Invalid packet.");
+            session_info_it->get_log().to_all("Invalid packet.");
             return {pckt, std::nullopt};
         }
         protocol::handle(*session_info_it, pckt);
@@ -214,6 +203,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
         _excp.set_session_info(*session_info_it);
         throw;
     }
+    session_info_it->last_received_ms = get_now_ms();
 
     // Sets current session for possible work
     cv_io.notify_one();
@@ -281,12 +271,11 @@ void essu::session_handler::add_session_internal(
         log.throw_exception<session_error>("Config of endpoint is not added.");
 
     decltype(auto) endpoint_config_r = endpoint_config_it->get();
-    session_s.push_back(session_info_type_extended{
-        log, endpoint_config_r.endpoint, endpoint_config_r.local_role, config.ext,
-        endpoint_config_r.public_key, endpoint_config_r.pre_shared_key, config.keypair});
+    session_s.emplace_back(endpoint_config_r.endpoint, endpoint_config_r.local_role,
+                           config.ext, endpoint_config_r.public_key,
+                           endpoint_config_r.pre_shared_key, config.keypair);
 
-    log.to_all("Session registered: {}",
-               std::string_view(session_s[session_s.size() - 1].string_remote_address));
+    session_s[session_s.size() - 1].get_log().to_all("Session registered.");
 }
 void essu::session_handler::delete_session_internal(
     session_info_proxy_type _session_info) {
@@ -294,8 +283,7 @@ void essu::session_handler::delete_session_internal(
         log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
     decltype(auto) session_info = _session_info.value().get();
 
-    log.to_all("Session removed: {}",
-               std::string_view(session_info.string_remote_address));
+    session_info.get_log().to_all("Session removed.");
     session_s.erase(std::find_if(session_s.begin(), session_s.end(),
                                  [&session_info](const auto &_session_info) {
                                      return &session_info == &_session_info;
@@ -312,15 +300,15 @@ void essu::session_handler::handle_session(session_info_proxy_type _session_info
 
     // Tries to control session and handles possible errors
     if (now_ms - session_info.last_received_ms >= timeout_ms)
-        session_info.log.throw_exception<session_error>("Timeout has been reached.");
+        session_info.get_log().throw_exception<session_error>("Timeout has been reached.");
 
     // If status of session is START or STOP:
     if (session_status == session_info_type::status_enum::START) {
         protocol::start_handshake(session_info);
-        session_info.log.to_all("Performing handshake...");
+        session_info.get_log().to_all("Performing handshake...");
     } else if (session_status == session_info_type::status_enum::STOP) {
         protocol::stop_handshake(session_info);
-        session_info.log.to_all("Handshake completed.");
+        session_info.get_log().to_all("Handshake completed.");
     }
 }
 

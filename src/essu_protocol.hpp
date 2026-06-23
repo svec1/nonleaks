@@ -17,22 +17,27 @@ struct session_info_type {
         COMPLETE,
     };
 
-public:
-    session_info_type(const log_proxy &_log, network::native_endpoint _remote_endpoint,
-                      noise::noise_role _role, noise::buffer_prologue_extention_type _ext,
+protected:
+    session_info_type(network::native_endpoint _remote_endpoint, noise::noise_role _role,
+                      noise::buffer_prologue_extention_type      _ext,
                       const noise_context_type::buffer_key_type &_remote_public_key,
                       const noise::buffer_pre_shared_key_type   &_pre_shared_key,
                       const noise_context_type::keypair_type    &_local_keypair)
-        : log(_log), remote_endpoint(_remote_endpoint),
+        : remote_endpoint(_remote_endpoint), log(log_handler),
           handshake_context(_role, _ext, _remote_public_key, _pre_shared_key,
                             _local_keypair) {
         reset_state();
+        update_dynamic_owner();
     }
     session_info_type(const session_info_type &) = delete;
     session_info_type(session_info_type &&)      = delete;
 
+public:
+    decltype(auto) get_remote_endpoint() const noexcept { return remote_endpoint; }
+    decltype(auto) get_log() const noexcept { return log; }
+
 private:
-    void reset_state() {
+    void reset_state() noexcept {
         status                        = status_enum::START;
         batch_sent_number             = 0;
         batch_received_number         = 0;
@@ -44,16 +49,22 @@ private:
         was_sent_retry                = false;
         was_received_retry            = false;
     }
+    void update_dynamic_owner() {
+        log.set_dynamic_owner(
+            noheap::to_new_buffer<noheap::log_impl::owner_impl::buffer_type>(
+                network::utils::bytes_address_to_string(remote_endpoint.address,
+                                                        remote_endpoint.v)));
+    }
 
 private:
-    const log_proxy &log;
-
-public:
     network::native_endpoint remote_endpoint;
 
 private:
+    log_proxy log;
+
+private:
     noise_handshake_context handshake_context;
-    std::uint16_t           handshake_number = 0;
+    std::uint16_t           handshake_number{0};
 
     status_enum   status;
     std::uint32_t batch_sent_number;
@@ -65,6 +76,11 @@ private:
     std::uint32_t undecrypted_batch_number;
     bool          was_sent_retry;
     bool          was_received_retry;
+
+private:
+    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
+        noheap::log_impl::create_owner("ESSU_SESSION");
+    static constexpr log_handler log_handler{buffer_owner};
 };
 
 class protocol final {
@@ -104,95 +120,112 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
         session_info.handshake_context.get_header_cipher_state_sender();
     decltype(auto) random_state     = session_info.handshake_context.get_random_state();
     bool session_handshake_complete = session_info.handshake_context.is_complete();
+    unit_type::unit_type_enum control_unit_type = unit_type::unit_type_enum::dummy;
 
     check_protocol_compliance(session_info, false);
     check_packet_compliance(session_info, pckt);
 
-    // Inits packet like handshake message if necessary
-    if (session_info.handshake_context.get_action() == noise::noise_action::WRITE_MESSAGE
-        && std::uniform_int_distribution(0, 1)(random_state.generator))
-        session_info.handshake_context.init_packet(pckt);
+    try {
+        // Inits packet like handshake message if necessary
+        if (session_info.handshake_context.get_action()
+                == noise::noise_action::WRITE_MESSAGE
+            && std::uniform_int_distribution(0, 1)(random_state.generator))
+            session_info.handshake_context.init_packet(pckt);
 
-    // If retry or available batch number is reached
-    if (session_info.was_received_retry
-        || (session_handshake_complete
-            && session_info.batch_sent_number
-                   == session_info.handshake_context.get_available_batch_number() - 1)) {
-        set_control_session_packet(pckt, unit_type::unit_type_enum::retry);
-        session_info.was_sent_retry = true;
-    }
+        // If retry or available batch number is reached
+        if (session_info.was_received_retry
+            || (session_handshake_complete
+                && session_info.batch_sent_number
+                       == session_info.handshake_context.get_available_batch_number()
+                              - 1)) {
+            set_control_session_packet(pckt, unit_type::unit_type_enum::retry);
+            session_info.was_sent_retry = true;
+        }
+        control_unit_type = get_control_unit(pckt).header.type;
 
-    // Forces control and last unit to be dummy
-    if (!is_control_session_packet_type(pckt))
-        get_control_unit(pckt).header.type = unit_type::unit_type_enum::dummy;
-    pckt.set_endpoint(session_info.remote_endpoint);
+        // Forces control and last unit to be dummy
+        if (!is_control_session_unit_type(control_unit_type))
+            get_control_unit(pckt).header.type = unit_type::unit_type_enum::dummy;
 
-    for (std::size_t i = 0; i < pckt->units.size(); ++i) {
-        decltype(auto) unit = pckt->units[i];
+        pckt.set_endpoint(session_info.remote_endpoint);
 
-        // Sets some data of header
-        unit.header.connection_id = session_info.handshake_context.get_handshake_id();
-        unit.header.number        = session_info.sender_unit_number++;
-        unit.header.key_iteration_number = session_info.sender_key_iteration_number;
+        for (std::size_t i = 0; i < pckt->units.size(); ++i) {
+            decltype(auto) unit = pckt->units[i];
 
-        // Adds random padding
-        {
-            // Determines payload size of the unit to define size of random
-            // padding
-            std::uint64_t payload_size;
-            switch (unit.header.type) {
-                case unit_type::unit_type_enum::session_request:
-                case unit_type::unit_type_enum::session_created:
-                case unit_type::unit_type_enum::session_confirmed:
-                    payload_size = unit.buffer.size();
-                    break;
-                case unit_type::unit_type_enum::data:
-                    payload_size = payload_data_size;
-                    break;
-                case unit_type::unit_type_enum::hole_punch:
-                    payload_size = 8;
-                    break;
-                case unit_type::unit_type_enum::dummy:
-                case unit_type::unit_type_enum::retry:
-                    payload_size = 0;
-                    break;
-                default:
-                    session_info.log.throw_exception<noheap::runtime_error>(
-                        "Undefined packet type: {}.",
-                        static_cast<std::size_t>(unit.header.type));
+            // Sets some data of header
+            unit.header.connection_id = session_info.handshake_context.get_handshake_id();
+            unit.header.number        = session_info.sender_unit_number++;
+            unit.header.key_iteration_number = session_info.sender_key_iteration_number;
+
+            // Adds random padding
+            {
+                // Determines payload size of the unit to define size of random
+                // padding
+                std::uint64_t payload_size;
+                switch (unit.header.type) {
+                    case unit_type::unit_type_enum::session_request:
+                    case unit_type::unit_type_enum::session_created:
+                    case unit_type::unit_type_enum::session_confirmed:
+                        payload_size = unit.buffer.size();
+                        break;
+                    case unit_type::unit_type_enum::data:
+                        payload_size = payload_data_size;
+                        break;
+                    case unit_type::unit_type_enum::hole_punch:
+                        payload_size = 8;
+                        break;
+                    case unit_type::unit_type_enum::dummy:
+                    case unit_type::unit_type_enum::retry:
+                        payload_size = 0;
+                        break;
+                    default:
+                        session_info.log.throw_exception<noheap::runtime_error>(
+                            "Undefined packet type: {}.",
+                            static_cast<std::size_t>(unit.header.type));
+                }
+
+                // Adds random padding after payload data
+                random_state.padding_buffer.set(noheap::make_span(unit.buffer),
+                                                payload_size);
+                random_state.pad();
             }
 
-            // Adds random padding after payload data
-            random_state.padding_buffer.set(noheap::make_span(unit.buffer), payload_size);
-            random_state.pad();
-        }
+            // Encrypts buffer data and authenticates based on the header
+            if (session_handshake_complete) {
+                payload_cipher_state.encrypt_buffer.set(noheap::make_span(unit.buffer),
+                                                        unit.buffer_size_without_mac());
+                payload_cipher_state.encrypt(
+                    {reinterpret_cast<noheap::rbyte *>(&unit.header),
+                     sizeof(unit.header)});
 
-        // Encrypts buffer data and authenticates based on the header
-        if (session_handshake_complete) {
-            payload_cipher_state.encrypt_buffer.set(noheap::make_span(unit.buffer),
-                                                    unit.buffer_size_without_mac());
-            payload_cipher_state.encrypt(
-                {reinterpret_cast<noheap::rbyte *>(&unit.header), sizeof(unit.header)});
-
-            // Performs rekey for encryption
-            if (unit.header.number % unit_per_rekey_number == 0) {
-                payload_cipher_state.rekey_encrypt();
-                ++session_info.sender_key_iteration_number;
+                // Performs rekey for encryption
+                if (unit.header.number % unit_per_rekey_number == 0) {
+                    payload_cipher_state.rekey_encrypt();
+                    ++session_info.sender_key_iteration_number;
+                }
             }
-        }
 
-        // Adds header data obfuscation
-        std::transform(reinterpret_cast<noheap::rbyte *>(&unit.header),
-                       reinterpret_cast<noheap::rbyte *>(&unit.header)
-                           + sizeof(unit.header),
-                       derive_header_obfs_key(header_cipher_state).data(),
-                       reinterpret_cast<noheap::rbyte *>(&unit.header), std::bit_xor{});
+            // Adds header data obfuscation
+            std::transform(
+                reinterpret_cast<noheap::rbyte *>(&unit.header),
+                reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
+                derive_header_obfs_key(header_cipher_state).data(),
+                reinterpret_cast<noheap::rbyte *>(&unit.header), std::bit_xor{});
+        }
+    } catch (const protocol_error &excp) {
+        session_info.log.throw_exception<protocol_error>(
+            "Failed to prepare the passed batch: {}", excp.what());
     }
 
     // Shuffles units in batch
     std::shuffle(pckt->units.begin(), pckt->units.end(), random_state.generator);
-
     ++session_info.batch_sent_number;
+
+    if (is_control_session_unit_type(control_unit_type))
+        session_info.log.to_all("{} -> [{}] packet is prepared.",
+                                session_handshake_complete ? "Posthandshake"
+                                                           : "Handshake",
+                                utils::get_string_unit_type(control_unit_type));
 }
 
 void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) {
@@ -201,6 +234,7 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
     decltype(auto) header_cipher_state =
         session_info.handshake_context.get_header_cipher_state_receiver();
     bool session_handshake_complete = session_info.handshake_context.is_complete();
+    unit_type::unit_type_enum control_unit_type = unit_type::unit_type_enum::dummy;
 
     check_protocol_compliance(session_info, true);
 
@@ -274,15 +308,31 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
     check_packet_compliance(session_info, pckt);
     ++session_info.batch_received_number;
 
-    // If available batch number is reached
+    // Updates session's remote endpoint
+    {
+        decltype(auto) packet_endpoint = pckt.get_endpoint();
+        bool endpoints_are_different = (packet_endpoint == session_info.remote_endpoint);
+        if (endpoints_are_different)
+            session_info.remote_endpoint = pckt.get_endpoint();
+        session_info.update_dynamic_owner();
+    }
+    control_unit_type = get_control_unit(pckt).header.type;
+
+    // If handshake is completed and the packet has a control unit retry
     if (session_handshake_complete
-        && get_control_unit(pckt).header.type == unit_type::unit_type_enum::retry)
+        && control_unit_type == unit_type::unit_type_enum::retry)
         session_info.was_received_retry = true;
 
-    // Handles packet like handshake message if necessary
+    // Handles the packet like handshake message if necessary
     if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE
-        && is_control_session_packet_type(pckt))
+        && is_control_session_unit_type(control_unit_type))
         session_info.handshake_context.handle_packet(std::move(pckt));
+
+    if (is_control_session_unit_type(control_unit_type))
+        session_info.log.to_all("{} -> [{}] packet is handled.",
+                                session_handshake_complete ? "Posthandshake"
+                                                           : "Handshake",
+                                utils::get_string_unit_type(control_unit_type));
 }
 void essu::protocol::start_handshake(session_info_type &session_info) {
     session_info.reset_state();

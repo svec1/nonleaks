@@ -44,6 +44,11 @@ concept Derived_from_action =
     std::derived_from<std::decay_t<T>, action<typename std::decay_t<T>::packet_type>>;
 
 struct native_endpoint {
+    bool operator==(const native_endpoint &other) const noexcept {
+        return v == other.v && address == other.address && port == other.port;
+    }
+
+public:
     ipv                 v;
     buffer_address_type address;
     port_type           port;
@@ -59,14 +64,16 @@ public:
     packet_native_type() = default;
 
 public:
-    packet_native_type(const packet_native_type &packet) { *this = packet; }
-    packet_native_type(packet_native_type &&packet) { *this = std::move(packet); }
-    packet_native_type &operator=(const packet_native_type &packet) {
+    packet_native_type(const packet_native_type &packet) noexcept { *this = packet; }
+    packet_native_type(packet_native_type &&packet) noexcept {
+        *this = std::move(packet);
+    }
+    packet_native_type &operator=(const packet_native_type &packet) noexcept {
         this->_extention_data = packet._extention_data;
         this->endpoint        = packet.endpoint;
         return *this;
     }
-    packet_native_type &operator=(packet_native_type &&packet) {
+    packet_native_type &operator=(packet_native_type &&packet) noexcept {
         this->_extention_data = std::move(packet._extention_data);
         this->endpoint        = std::move(packet.endpoint);
         return *this;

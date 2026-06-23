@@ -106,6 +106,29 @@ public:
     using base_error::base_error;
 };
 
+namespace utils {
+    inline auto get_string_unit_type(unit_type::unit_type_enum unit_type) noexcept {
+        switch (unit_type) {
+            case unit_type::unit_type_enum::session_request:
+                return "session_request";
+            case unit_type::unit_type_enum::session_created:
+                return "session_created";
+            case unit_type::unit_type_enum::session_confirmed:
+                return "session_confirmed";
+            case unit_type::unit_type_enum::retry:
+                return "retry";
+            case unit_type::unit_type_enum::hole_punch:
+                return "hole_punch";
+            case unit_type::unit_type_enum::data:
+                return "data";
+            case unit_type::unit_type_enum::dummy:
+                return "dummy";
+            default:
+                throw noheap::runtime_error("Undefined unit type.");
+        }
+    }
+} // namespace utils
+
 template<Packet_type T>
 inline decltype(auto) get_last_unit(T &&pckt) {
     return pckt->units[batch_units_number - 1];
