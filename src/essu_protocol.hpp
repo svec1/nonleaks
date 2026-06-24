@@ -98,7 +98,7 @@ public:
                                                 const packet_type &pckt);
 
     static inline noise_handshake_context::buffer_current_state_hash_type
-        get_hash_current_state(const session_info_type &session_info);
+        get_current_state_hash(const session_info_type &session_info);
     static inline std::uint64_t
                        get_handshake_number(const session_info_type &session_info);
     static inline bool can_send_packet(const session_info_type &session_info);
@@ -406,8 +406,8 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
 }
 
 essu::noise_handshake_context::buffer_current_state_hash_type
-    essu::protocol::get_hash_current_state(const session_info_type &session_info) {
-    return session_info.handshake_context.get_hash_current_state();
+    essu::protocol::get_current_state_hash(const session_info_type &session_info) {
+    return session_info.handshake_context.get_current_state_hash();
 }
 std::uint64_t
     essu::protocol::get_handshake_number(const session_info_type &session_info) {

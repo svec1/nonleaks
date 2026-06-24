@@ -309,13 +309,13 @@ void essu::session_handler::handle_session(session_info_proxy_type _session_info
         session_info.get_log().to_all(
             "{} Performing handshake...",
             std::string_view(
-                noheap::hex_encode(protocol::get_hash_current_state(session_info))));
+                noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     } else if (session_status == session_info_type::status_enum::STOP) {
         protocol::stop_handshake(session_info);
         session_info.get_log().to_all(
             "{} Handshake completed.",
             std::string_view(
-                noheap::hex_encode(protocol::get_hash_current_state(session_info))));
+                noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     }
 }
 
