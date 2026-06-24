@@ -222,10 +222,12 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
     ++session_info.batch_sent_number;
 
     if (is_control_session_unit_type(control_unit_type))
-        session_info.log.to_all("{} -> [{}] packet is prepared.",
-                                session_handshake_complete ? "Posthandshake"
-                                                           : "Handshake",
-                                utils::get_string_unit_type(control_unit_type));
+        session_info.log.to_all(
+            "{} {} -> [{}] packet is prepared.",
+            std::string_view(noheap::hex_encode(
+                session_info.handshake_context.get_hash_current_state())),
+            session_handshake_complete ? "Posthandshake" : "Handshake",
+            utils::get_string_unit_type(control_unit_type));
 }
 
 void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) {
@@ -329,10 +331,12 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
         session_info.handshake_context.handle_packet(std::move(pckt));
 
     if (is_control_session_unit_type(control_unit_type))
-        session_info.log.to_all("{} -> [{}] packet is handled.",
-                                session_handshake_complete ? "Posthandshake"
-                                                           : "Handshake",
-                                utils::get_string_unit_type(control_unit_type));
+        session_info.log.to_all(
+            "{} {} -> [{}] packet is handled.",
+            std::string_view(noheap::hex_encode(
+                session_info.handshake_context.get_hash_current_state())),
+            session_handshake_complete ? "Posthandshake" : "Handshake",
+            utils::get_string_unit_type(control_unit_type));
 }
 void essu::protocol::start_handshake(session_info_type &session_info) {
     session_info.reset_state();

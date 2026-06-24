@@ -60,11 +60,12 @@ enum class cipher_type : std::uint16_t {
 };
 
 enum class hash_type : std::uint16_t {
-    UNKNOWN = 0,
-    SHA256  = NOISE_HASH_SHA256,
-    SHA512  = NOISE_HASH_SHA512,
-    SHA3256 = NOISE_HASH_SHA3256,
-    SHA3512 = NOISE_HASH_SHA3512,
+    UNKNOWN   = 0,
+    RIPEMD160 = NOISE_HASH_RIPEMD160,
+    SHA256    = NOISE_HASH_SHA256,
+    SHA512    = NOISE_HASH_SHA512,
+    SHA3256   = NOISE_HASH_SHA3256,
+    SHA3512   = NOISE_HASH_SHA3512,
 };
 
 inline noise_pattern get_noise_pattern(const std::string_view pattern_string) {
@@ -166,7 +167,9 @@ consteval std::size_t get_nonce_size() {
 
 template<hash_type hash>
 consteval std::size_t get_hash_size() {
-    if constexpr (hash == hash_type::SHA256 || hash == hash_type::SHA3256)
+    if constexpr (hash == hash_type::RIPEMD160)
+        return 20;
+    else if constexpr (hash == hash_type::SHA256 || hash == hash_type::SHA3256)
         return 32;
     else if constexpr (hash == hash_type::SHA512 || hash == hash_type::SHA3512)
         return 64;
@@ -420,8 +423,11 @@ public:
         NoiseDHState *dhstate;
     };
 
+    template<hash_type _hash>
     struct hash_state {
-        using buffer_type = buffer_type<get_hash_size<config.hash>()>;
+        static constexpr hash_type hash = _hash;
+
+        using buffer_type = buffer_type<get_hash_size<hash>()>;
 
     public:
         hash_state();
@@ -469,10 +475,10 @@ public:
     void set_handshake_message();
     void get_handshake_message();
 
-    void                    set_prologue(buffer_prologue_extention_type ext);
-    buffer_prologue_type    get_prologue();
-    buffer_key_type         get_remote_public_key();
-    hash_state::buffer_type get_handshake_hash();
+    void                 set_prologue(buffer_prologue_extention_type ext);
+    buffer_prologue_type get_prologue();
+    buffer_key_type      get_remote_public_key();
+    hash_state<_config.hash>::buffer_type get_handshake_hash();
 
     void set_local_keypair(const keypair_type &kp);
     void set_remote_public_key(const buffer_key_type &key);
@@ -705,11 +711,11 @@ std::uint64_t
 }
 template<noise::noise_context_config _config>
 bool noise::noise_context<_config>::cipher_state::has_encrypt_key() {
-	return noise_cipherstate_has_key(encrypt_state);
+    return noise_cipherstate_has_key(encrypt_state);
 }
 template<noise::noise_context_config _config>
 bool noise::noise_context<_config>::cipher_state::has_decrypt_key() {
-	return noise_cipherstate_has_key(decrypt_state);
+    return noise_cipherstate_has_key(decrypt_state);
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::check_encrypt_key() const {
@@ -817,22 +823,25 @@ void noise::noise_context<_config>::dh_state<_dh>::get_keypair(keypair_type &key
 
 // Hash state
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::hash_state::hash_state() {
+template<noise::hash_type _hash>
+noise::noise_context<_config>::hash_state<_hash>::hash_state() {
     std::size_t ret;
-    if ((ret = noise_hashstate_new_by_id(&hashstate,
-                                         static_cast<std::uint16_t>(config.hash)))
+    if ((ret = noise_hashstate_new_by_id(&hashstate, static_cast<std::uint16_t>(hash)))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to init hash state.");
 }
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::hash_state::~hash_state() {
+template<noise::hash_type _hash>
+noise::noise_context<_config>::hash_state<_hash>::~hash_state() {
     std::size_t ret;
     if ((ret = noise_hashstate_free(hashstate)) != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to free hash state.");
 }
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::hash_state::buffer_type
-    noise::noise_context<_config>::hash_state::get_hash(std::span<noheap::rbyte> buffer) {
+template<noise::hash_type _hash>
+noise::noise_context<_config>::hash_state<_hash>::buffer_type
+    noise::noise_context<_config>::hash_state<_hash>::get_hash(
+        std::span<noheap::rbyte> buffer) {
     decltype(get_hash(buffer)) buffer_tmp{};
     std::size_t                ret;
     if ((ret = noise_hashstate_hash_one(
@@ -844,7 +853,8 @@ noise::noise_context<_config>::hash_state::buffer_type
     return buffer_tmp;
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::hash_state::hkdf(
+template<noise::hash_type _hash>
+void noise::noise_context<_config>::hash_state<_hash>::hkdf(
     std::span<const noheap::rbyte> buffer, std::span<const noheap::rbyte> key,
     std::span<noheap::rbyte> output1, std::span<noheap::rbyte> output2) {
     std::size_t ret;
@@ -988,7 +998,7 @@ noise::noise_context<_config>::buffer_key_type
     return buffer_tmp;
 }
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::hash_state::buffer_type
+noise::noise_context<_config>::hash_state<_config.hash>::buffer_type
     noise::noise_context<_config>::get_handshake_hash() {
     decltype(get_handshake_hash()) buffer_hash{};
 
