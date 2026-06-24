@@ -70,7 +70,7 @@ template<typename T>
 concept Buffer_bytes_or_chars = Buffer_bytes<T> || Buffer_chars<T>;
 
 template<Buffer TReturn, typename TSource>
-    requires(buffer_size<TReturn> <= buffer_size<TSource>)
+    requires(buffer_size<TReturn> <= sizeof(TSource))
 constexpr TReturn to_buffer(TSource &&el) {
     return *reinterpret_cast<std::remove_reference_t<TReturn> *>(&el);
 }

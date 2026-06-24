@@ -45,7 +45,7 @@ public:
     inline noise::noise_action                        get_action() const;
     inline std::uint16_t                              get_available_batch_number() const;
     inline std::uint64_t                              get_handshake_id() const;
-    inline buffer_current_state_hash_type             get_hash_current_state();
+    inline buffer_current_state_hash_type             get_hash_current_state() const;
     inline const noise_context_type::buffer_key_type &get_remote_public_key() const;
     inline typename noise_context_type::hash_state<
         essu::noise_handshake_context::config_hash>                                               &
@@ -77,7 +77,7 @@ private:
     typename noise_context_type::cipher_state          header_cipher_state_receiver;
     typename noise_context_type::random_state          random_state;
     noise_context_type::hash_state<config_hash>        hash_state;
-    noise_context_type::hash_state<current_state_hash> current_hash_state;
+    noise_context_type::hash_state<current_state_hash> current_state_hash_state;
 
     noise::noise_role                       role;
     noise::buffer_prologue_extention_type   ext;
@@ -86,15 +86,15 @@ private:
     const noise_context_type::keypair_type &local_keypair;
 
     typename noise::buffer_handshake_packet_type buffer_handshake_message{};
-    std::size_t                                  offset_noise_handshake_unit;
-    bool                                         fragmentation;
+    std::size_t                                  offset_noise_handshake_unit{};
+    bool                                         fragmentation{};
 
     typename noise::buffer_handshake_payload_type handshake_payload{};
     buffer_config_hash_type                       handshake_hash{};
     buffer_unique_value_type                      unique_value{};
     buffer_unique_value_type                      unique_value_previous{};
-    std::uint16_t                                 available_batch_number;
-    std::uint64_t                                 handshake_id;
+    std::uint16_t                                 available_batch_number{};
+    std::uint64_t                                 handshake_id{};
 };
 
 } // namespace essu
@@ -248,11 +248,11 @@ std::uint16_t essu::noise_handshake_context::get_available_batch_number() const 
 std::uint64_t essu::noise_handshake_context::get_handshake_id() const {
     return handshake_id;
 }
-typename essu::noise_handshake_context::buffer_current_state_hash_type
-    essu::noise_handshake_context::get_hash_current_state() {
+essu::noise_handshake_context::buffer_current_state_hash_type
+    essu::noise_handshake_context::get_hash_current_state() const {
     decltype(get_hash_current_state()) state{};
-    const auto                         xor_buffers = [](std::span<noheap::rbyte> buffer1,
-                                std::span<noheap::rbyte> buffer2) {
+    const auto                         xor_buffers = [](std::span<noheap::rbyte>       buffer1,
+                                std::span<const noheap::rbyte> buffer2) {
         std::transform(
             buffer1.begin(),
             buffer1.begin()
@@ -267,12 +267,19 @@ typename essu::noise_handshake_context::buffer_current_state_hash_type
     xor_buffers(state, noheap::make_span(header_cipher_state_sender.get_encrypt_nonce()));
     xor_buffers(state,
                 noheap::make_span(header_cipher_state_receiver.get_encrypt_nonce()));
+    xor_buffers(state, noheap::to_buffer<const noheap::buffer_bytes_type<
+                           sizeof(available_batch_number), noheap::rbyte>>(
+                           available_batch_number));
+    xor_buffers(state,
+                noheap::to_buffer<
+                    const noheap::buffer_bytes_type<sizeof(handshake_id), noheap::rbyte>>(
+                    handshake_id));
     if (payload_cipher_state.has_encrypt_key()) {
         xor_buffers(state, noheap::make_span(payload_cipher_state.get_encrypt_nonce()));
         xor_buffers(state, noheap::make_span(payload_cipher_state.get_decrypt_nonce()));
     }
 
-    return current_hash_state.get_hash(
+    return current_state_hash_state.get_hash(
         noheap::make_span(hash_state.get_hash(noheap::make_span(state))));
 }
 const essu::noise_context_type::buffer_key_type &
@@ -407,9 +414,10 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     header_cipher_state_receiver.set_encrypt_nonce({});
 
     // Sets ephemeral handshake id
-    handshake_id = noheap::represent_bytes<std::uint64_t>(
+    available_batch_number = 0;
+    handshake_id           = noheap::represent_bytes<std::uint64_t>(
         noheap::clip_buffer<sizeof(std::uint64_t),
-                            noheap::buffer_size<noise_context_type::buffer_key_type> * 2>(
+                                      noheap::buffer_size<noise_context_type::buffer_key_type> * 2>(
             keystream));
 }
 
@@ -429,10 +437,10 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
 
     // Handles the first unique_value
     {
-        available_batch_number = std::clamp<std::uint32_t>(
-            noheap::represent_bytes<std::uint32_t>(
-                noheap::clip_buffer<sizeof(std::uint32_t), 0>(unique_value)),
-            min_available_batch_number, max_available_batch_number);
+        available_batch_number = std::clamp<std::uint16_t>(
+            noheap::represent_bytes<std::uint16_t>(
+                noheap::clip_buffer<sizeof(std::uint16_t), 0>(unique_value)),
+            min_available_batch_number, std::uint16_t(max_available_batch_number));
         handshake_id = noheap::represent_bytes<std::uint64_t>(
             noheap::clip_buffer<sizeof(std::uint64_t), sizeof(std::uint16_t)>(
                 unique_value));

@@ -64,7 +64,7 @@ private:
 
 private:
     noise_handshake_context handshake_context;
-    std::uint16_t           handshake_number{0};
+    std::uint16_t           handshake_number{};
 
     status_enum   status;
     std::uint32_t batch_sent_number;
@@ -98,7 +98,7 @@ public:
                                                 const packet_type &pckt);
 
     static inline noise_handshake_context::buffer_current_state_hash_type
-        get_hash_current_state(session_info_type &session_info);
+        get_hash_current_state(const session_info_type &session_info);
     static inline std::uint64_t
                        get_handshake_number(const session_info_type &session_info);
     static inline bool can_send_packet(const session_info_type &session_info);
@@ -406,7 +406,7 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
 }
 
 essu::noise_handshake_context::buffer_current_state_hash_type
-    essu::protocol::get_hash_current_state(session_info_type &session_info) {
+    essu::protocol::get_hash_current_state(const session_info_type &session_info) {
     return session_info.handshake_context.get_hash_current_state();
 }
 std::uint64_t

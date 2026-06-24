@@ -370,8 +370,8 @@ public:
         std::uint64_t     get_encrypt_counter_block() const;
         std::uint64_t     get_decrypt_counter_block() const;
 
-        bool has_encrypt_key();
-        bool has_decrypt_key();
+        bool has_encrypt_key() const;
+        bool has_decrypt_key() const;
 
     private:
         void set_states(NoiseCipherState *_encrypt_state,
@@ -439,14 +439,15 @@ public:
         ~hash_state();
 
     public:
-        buffer_type get_hash(std::span<noheap::rbyte> buffer);
+        buffer_type get_hash(std::span<noheap::rbyte> buffer) const;
 
         void hkdf(std::span<const noheap::rbyte> buffer,
                   std::span<const noheap::rbyte> key, std::span<noheap::rbyte> output1,
-                  std::span<noheap::rbyte> output2);
+                  std::span<noheap::rbyte> output2) const;
 
     private:
-        NoiseHashState *hashstate = nullptr;
+		// This is so because interface of this class does not imply an update function
+        mutable NoiseHashState *hashstate = nullptr;
     };
 
 public:
@@ -710,11 +711,11 @@ std::uint64_t
     return counter;
 }
 template<noise::noise_context_config _config>
-bool noise::noise_context<_config>::cipher_state::has_encrypt_key() {
+bool noise::noise_context<_config>::cipher_state::has_encrypt_key() const {
     return noise_cipherstate_has_key(encrypt_state);
 }
 template<noise::noise_context_config _config>
-bool noise::noise_context<_config>::cipher_state::has_decrypt_key() {
+bool noise::noise_context<_config>::cipher_state::has_decrypt_key() const {
     return noise_cipherstate_has_key(decrypt_state);
 }
 template<noise::noise_context_config _config>
@@ -841,7 +842,7 @@ template<noise::noise_context_config _config>
 template<noise::hash_type _hash>
 noise::noise_context<_config>::hash_state<_hash>::buffer_type
     noise::noise_context<_config>::hash_state<_hash>::get_hash(
-        std::span<noheap::rbyte> buffer) {
+        std::span<noheap::rbyte> buffer) const {
     decltype(get_hash(buffer)) buffer_tmp{};
     std::size_t                ret;
     if ((ret = noise_hashstate_hash_one(
@@ -856,7 +857,7 @@ template<noise::noise_context_config _config>
 template<noise::hash_type _hash>
 void noise::noise_context<_config>::hash_state<_hash>::hkdf(
     std::span<const noheap::rbyte> buffer, std::span<const noheap::rbyte> key,
-    std::span<noheap::rbyte> output1, std::span<noheap::rbyte> output2) {
+    std::span<noheap::rbyte> output1, std::span<noheap::rbyte> output2) const {
     std::size_t ret;
     if ((ret = noise_hashstate_hkdf(
              hashstate, reinterpret_cast<const noheap::ubyte *>(key.data()), key.size(),
