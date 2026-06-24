@@ -97,6 +97,8 @@ public:
     static inline bool check_affiliation_packet(session_info_type &session_info,
                                                 const packet_type &pckt);
 
+    static inline noise_handshake_context::buffer_current_state_hash_type
+        get_hash_current_state(session_info_type &session_info);
     static inline std::uint64_t
                        get_handshake_number(const session_info_type &session_info);
     static inline bool can_send_packet(const session_info_type &session_info);
@@ -220,14 +222,6 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
     // Shuffles units in batch
     std::shuffle(pckt->units.begin(), pckt->units.end(), random_state.generator);
     ++session_info.batch_sent_number;
-
-    if (is_control_session_unit_type(control_unit_type))
-        session_info.log.to_all(
-            "{} {} -> [{}] packet is prepared.",
-            std::string_view(noheap::hex_encode(
-                session_info.handshake_context.get_hash_current_state())),
-            session_handshake_complete ? "Posthandshake" : "Handshake",
-            utils::get_string_unit_type(control_unit_type));
 }
 
 void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) {
@@ -329,14 +323,6 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
     if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE
         && is_control_session_unit_type(control_unit_type))
         session_info.handshake_context.handle_packet(std::move(pckt));
-
-    if (is_control_session_unit_type(control_unit_type))
-        session_info.log.to_all(
-            "{} {} -> [{}] packet is handled.",
-            std::string_view(noheap::hex_encode(
-                session_info.handshake_context.get_hash_current_state())),
-            session_handshake_complete ? "Posthandshake" : "Handshake",
-            utils::get_string_unit_type(control_unit_type));
 }
 void essu::protocol::start_handshake(session_info_type &session_info) {
     session_info.reset_state();
@@ -419,6 +405,10 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
     return false;
 }
 
+essu::noise_handshake_context::buffer_current_state_hash_type
+    essu::protocol::get_hash_current_state(session_info_type &session_info) {
+    return session_info.handshake_context.get_hash_current_state();
+}
 std::uint64_t
     essu::protocol::get_handshake_number(const session_info_type &session_info) {
     return session_info.handshake_number;

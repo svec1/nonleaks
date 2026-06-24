@@ -300,15 +300,22 @@ void essu::session_handler::handle_session(session_info_proxy_type _session_info
 
     // Tries to control session and handles possible errors
     if (now_ms - session_info.last_received_ms >= timeout_ms)
-        session_info.get_log().throw_exception<session_error>("Timeout has been reached.");
+        session_info.get_log().throw_exception<session_error>(
+            "Timeout has been reached.");
 
     // If status of session is START or STOP:
     if (session_status == session_info_type::status_enum::START) {
         protocol::start_handshake(session_info);
-        session_info.get_log().to_all("Performing handshake...");
+        session_info.get_log().to_all(
+            "{} Performing handshake...",
+            std::string_view(
+                noheap::hex_encode(protocol::get_hash_current_state(session_info))));
     } else if (session_status == session_info_type::status_enum::STOP) {
         protocol::stop_handshake(session_info);
-        session_info.get_log().to_all("Handshake completed.");
+        session_info.get_log().to_all(
+            "{} Handshake completed.",
+            std::string_view(
+                noheap::hex_encode(protocol::get_hash_current_state(session_info))));
     }
 }
 
