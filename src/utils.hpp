@@ -153,8 +153,7 @@ std::span<buffer_value_type<TSource>> make_span(TSource &&buffer) noexcept {
 
 class const_error : public std::exception {
 public:
-    constexpr const_error(const std::string_view _what_str)
-        : what_str(_what_str) {}
+    const_error(const std::string_view _what_str) noexcept : what_str(_what_str) {}
 
 public:
     const char *what() const noexcept override { return what_str.data(); }
@@ -241,8 +240,8 @@ public:
 
         end_it =
             std::format_to_n(end_it, out_size, format, std::forward<Args>(args)...).out;
-        *end_it = '\n';
-        *(end_it+1) = '\0';
+        *end_it       = '\n';
+        *(end_it + 1) = '\0';
         return buffer;
     }
 };
