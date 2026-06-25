@@ -153,7 +153,7 @@ std::span<buffer_value_type<TSource>> make_span(TSource &&buffer) noexcept {
 
 class const_error : public std::exception {
 public:
-    constexpr const_error(const std::string_view _what_str) noexcept
+    constexpr const_error(const std::string_view _what_str)
         : what_str(_what_str) {}
 
 public:
