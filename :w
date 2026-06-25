@@ -179,21 +179,21 @@ public:
 public:
     template<char end_ch, typename... Args>
     static void out(std::format_string<Args...> format, Args &&...args) {
-        buffer_type buffer;
         std::size_t out_size =
             std::formatted_size(format, std::forward<Args>(args)...) + 2;
-        if (noheap::buffer_size<decltype(buffer)> < out_size)
+        if (noheap::buffer_size<buffer_type> < out_size)
             throw const_runtime_error("Formattable output has large size.");
 
-        auto end_it       = std::format_to_n(buffer.begin(), buffer_size, format,
-                                             std::forward<Args>(args)...);
-        *end_it.out       = end_ch;
-        *(end_it.out + 1) = '\0';
+        buffer_type buffer;
+        auto        end_it = std::format_to_n(buffer.begin(), buffer_size, format,
+                                              std::forward<Args>(args)...);
+        *end_it.out        = end_ch;
+        *(end_it.out + 1)  = '\0';
 
-        out_buffer(buffer, out_size);
+        out_buffer(std::move(buffer), out_size);
     }
 
-    static void out_buffer(const buffer_type &buffer, std::size_t size,
+    static void out_buffer(buffer_type &&buffer, std::size_t size,
                            std::size_t outstream = 1) noexcept {
         ::write(outstream, buffer.data(), size);
     }
@@ -222,27 +222,23 @@ public:
 
     template<typename... Args>
     static constexpr print_impl::buffer_type
-        create_log_data(std::size_t &out_size, owner_impl::buffer_type buffer_owner,
+        create_log_data(owner_impl::buffer_type buffer_owner, std::size_t &out_size,
                         std::format_string<Args...> format, Args &&...args) {
         print_impl::buffer_type buffer;
         auto                    end_it = buffer.begin();
-
-        out_size = 0;
+		
+		out_size = 0;
         if (buffer_owner[0] != '\0') {
-            out_size += std::formatted_size("[{}]: ", buffer_owner.data());
+            out_size = std::formatted_size("[{}]: ", buffer_owner.data());
             end_it =
                 std::format_to_n(buffer.begin(), out_size, "[{}]: ", buffer_owner.data())
                     .out;
         }
 
-        out_size += std::formatted_size(format, std::forward<Args>(args)...) + 2;
-        if (noheap::buffer_size<decltype(buffer)> < out_size)
-            throw const_runtime_error("Formattable output has large size.");
-
+        out_size += std::formatted_size(format, std::forward<Args>(args)...) + 1;
         end_it =
             std::format_to_n(end_it, out_size, format, std::forward<Args>(args)...).out;
-        *end_it = '\n';
-        *(end_it+1) = '\0';
+        *end_it = '\0';
         return buffer;
     }
 };
@@ -847,20 +843,30 @@ private:
     static constexpr void log(std::size_t                               outstream,
                               noheap::log_impl::owner_impl::buffer_type buffer_owner,
                               std::format_string<Args...> format, Args &&...args) {
-        std::size_t out_size;
-        auto buffer = noheap::log_impl::create_log_data(out_size, buffer_owner, format,
-                                                        std::forward<Args>(args)...);
+        switch (async) {
+            default:
+            case output_type::flush: {
+                noheap::print_impl::out_buffer(
+                    noheap::log_impl::create_log_data(buffer_owner, format,
+                                                      std::forward<Args>(args)...),
+                    outstream);
+            } break;
+            case output_type::async: {
+                static std::future<void> future_object;
 
-        if constexpr (async == output_type::flush)
-            noheap::print_impl::out_buffer(buffer, out_size, outstream);
-        else {
-            static std::future<void> future_object;
+                if (future_object.valid())
+                    future_object.get();
 
-            if (future_object.valid())
-                future_object.get();
-
-            future_object = std::async(std::launch::async, noheap::print_impl::out_buffer,
-                                       buffer, out_size, outstream);
+                future_object = std::async(
+                    std::launch::async,
+                    std::bind(
+                        [outstream, buffer_owner, format](auto args...) {
+                            auto buffer = noheap::log_impl::create_log_data(
+                                buffer_owner, format, std::forward<Args>(args)...);
+                            noheap::print_impl::out_buffer(buffer, , outstream);
+                        },
+                        std::forward<Args>(args)...));
+            } break;
         }
     }
 

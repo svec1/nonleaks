@@ -278,14 +278,14 @@ public:
 
     struct noise_buffer_view {
     public:
-        void set(std::span<noheap::rbyte> buffer, std::size_t payload_size) {
+        void set(std::span<noheap::rbyte> buffer, std::size_t payload_size) noexcept {
             noise_buffer_set_inout(this->buffer,
                                    reinterpret_cast<noheap::ubyte *>(buffer.data()),
                                    payload_size, buffer.size());
         }
 
         template<typename T>
-        auto &get(this T &&_this) {
+        auto &get(this T &&_this) noexcept {
             return _this.buffer;
         }
 

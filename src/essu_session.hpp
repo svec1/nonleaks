@@ -158,14 +158,18 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     packet_type    pckt            = receive_buffer.pop_front();
     decltype(auto) session_info_it = session_s.end();
     decltype(auto) remote_endpoint = pckt.get_endpoint();
-    bool           is_exist        = false;
 
     // Finds suitable session by packet
     for (decltype(auto) it = session_s.begin(); it < session_s.end(); ++it) {
-        if (protocol::check_affiliation_packet(*it, pckt)) {
-            session_info_it = it;
-            is_exist        = true;
-            break;
+        try {
+            handle_session(*it);
+            if (protocol::check_affiliation_packet(*it, pckt)) {
+                session_info_it = it;
+                break;
+            }
+        } catch (base_error &_excp) {
+            _excp.set_session_info(*it);
+            throw;
         }
     }
 
@@ -189,15 +193,20 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
             add_session_internal(config_tmp);
         }
         session_info_it = session_s.end() - 1;
+        try {
+            handle_session(*session_info_it);
+            if (!protocol::check_affiliation_packet(*session_info_it, pckt)) {
+                session_info_it->get_log().to_all("Invalid packet.");
+                return {pckt, std::nullopt};
+            }
+        } catch (base_error &_excp) {
+            _excp.set_session_info(*session_info_it);
+            throw;
+        }
     }
 
     // Handles the packet
     try {
-        handle_session(*session_info_it);
-        if (!is_exist && !protocol::check_affiliation_packet(*session_info_it, pckt)) {
-            session_info_it->get_log().to_all("Invalid packet.");
-            return {pckt, std::nullopt};
-        }
         protocol::handle(*session_info_it, pckt);
     } catch (base_error &_excp) {
         _excp.set_session_info(*session_info_it);
@@ -296,7 +305,7 @@ void essu::session_handler::handle_session(session_info_proxy_type _session_info
     if (!_session_info.has_value())
         log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
     decltype(auto) session_info   = _session_info.value().get();
-    decltype(auto) session_status = protocol::update_status(session_info);
+    decltype(auto) session_status = protocol::get_handshake_status(session_info);
 
     // Tries to control session and handles possible errors
     if (now_ms - session_info.last_received_ms >= timeout_ms)
@@ -304,13 +313,13 @@ void essu::session_handler::handle_session(session_info_proxy_type _session_info
             "Timeout has been reached.");
 
     // If status of session is START or STOP:
-    if (session_status == session_info_type::status_enum::START) {
+    if (session_status == session_info_type::handshake_status_enum::START) {
         protocol::start_handshake(session_info);
         session_info.get_log().to_all(
             "{} Performing handshake...",
             std::string_view(
                 noheap::hex_encode(protocol::get_current_state_hash(session_info))));
-    } else if (session_status == session_info_type::status_enum::STOP) {
+    } else if (session_status == session_info_type::handshake_status_enum::STOP) {
         protocol::stop_handshake(session_info);
         session_info.get_log().to_all(
             "{} Handshake completed.",
