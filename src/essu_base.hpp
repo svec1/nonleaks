@@ -16,6 +16,7 @@ constexpr std::size_t batch_units_number         = 4;
 constexpr std::size_t control_unit_number        = 3;
 constexpr std::size_t unit_per_rekey_number      = 6;
 constexpr std::size_t batch_window_number        = 256;
+constexpr std::size_t skip_batch_window_number   = 16;
 constexpr std::size_t min_available_batch_number = 1024;
 constexpr std::size_t max_available_batch_number =
     (std::uint32_t(-1) - 3) / batch_units_number;

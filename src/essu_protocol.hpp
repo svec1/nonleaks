@@ -47,8 +47,6 @@ private:
         undecrypted_batch_number      = 0;
         was_sent_retry                = false;
         was_received_retry            = false;
-        was_sent_confirmed            = false;
-        was_received_confirmed        = false;
     }
     void update_dynamic_owner() {
         log.set_dynamic_owner(
@@ -76,8 +74,8 @@ private:
     std::uint32_t undecrypted_batch_number;
     bool          was_sent_retry;
     bool          was_received_retry;
-    bool          was_sent_confirmed;
-    bool          was_received_confirmed;
+
+    bool predicted_skip_batch{};
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -145,10 +143,6 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
                               - 1)) {
             control_unit_type           = unit_type::unit_type_enum::retry;
             session_info.was_sent_retry = true;
-        } else if (session_info.was_received_confirmed
-                   || control_unit_type == unit_type::unit_type_enum::session_confirmed) {
-            control_unit_type = unit_type::unit_type_enum::session_confirmed;
-            session_info.was_sent_confirmed = true;
         }
 
         // Forces control and last unit to be dummy
@@ -236,83 +230,99 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
         session_info.handshake_context.get_payload_cipher_state();
     decltype(auto) header_cipher_state =
         session_info.handshake_context.get_header_cipher_state_receiver();
-    bool session_handshake_complete =
+    decltype(auto) control_unit_type = (get_control_unit(pckt).header.type);
+    bool           session_handshake_complete =
         (session_info.handshake_status
          == session_info_type::handshake_status_enum::COMPLETE);
-    unit_type::unit_type_enum control_unit_type = unit_type::unit_type_enum::dummy;
 
     check_protocol_compliance(session_info, true);
 
-    try {
-        // Selects possible unit number
-        std::uint64_t decrypted_units_number = 0;
-        std::uint64_t available_units_window_number =
-            session_info.receiver_unit_number + batch_units_number;
-        for (; session_info.receiver_unit_number < available_units_window_number;
-             ++session_info.receiver_unit_number) {
-            // Generates header obfuscation key based
-            decltype(auto) obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
+    if (session_info.predicted_skip_batch) {
+        session_info.predicted_skip_batch = false;
+        set_dummy_packet(pckt);
+    } else {
+        try {
+            // Selects possible unit number
+            std::uint64_t decrypted_units_number = 0;
+            std::uint64_t available_units_window_number =
+                session_info.receiver_unit_number + batch_units_number;
+            for (; session_info.receiver_unit_number < available_units_window_number;
+                 ++session_info.receiver_unit_number) {
+                // Generates header obfuscation key based
+                decltype(auto) obfs_key_tmp = derive_header_obfs_key(header_cipher_state);
 
-            for (auto &unit : pckt->units) {
-                {
-                    auto test_header = unit.header;
+                for (auto &unit : pckt->units) {
+                    {
+                        auto test_header = unit.header;
 
-                    // Deletes header data obfuscation
-                    std::transform(reinterpret_cast<noheap::rbyte *>(&test_header),
-                                   reinterpret_cast<noheap::rbyte *>(&test_header)
-                                       + sizeof(test_header),
-                                   obfs_key_tmp.data(),
-                                   reinterpret_cast<noheap::rbyte *>(&test_header),
-                                   std::bit_xor{});
+                        // Deletes header data obfuscation
+                        std::transform(reinterpret_cast<noheap::rbyte *>(&test_header),
+                                       reinterpret_cast<noheap::rbyte *>(&test_header)
+                                           + sizeof(test_header),
+                                       obfs_key_tmp.data(),
+                                       reinterpret_cast<noheap::rbyte *>(&test_header),
+                                       std::bit_xor{});
 
-                    if (test_header.connection_id
-                            != session_info.handshake_context.get_handshake_id()
-                        || test_header.number != session_info.receiver_unit_number)
-                        continue;
+                        if (test_header.connection_id
+                                != session_info.handshake_context.get_handshake_id()
+                            || test_header.number != session_info.receiver_unit_number)
+                            continue;
 
-                    unit.header = test_header;
-                }
-
-                // Tries to decrypt buffer data
-                if (session_handshake_complete) {
-                    // Loop handling rekeys performed in the remote endpoint
-                    for (; session_info.receiver_key_iteration_number
-                           < unit.header.key_iteration_number;
-                         ++session_info.receiver_key_iteration_number)
-                        payload_cipher_state.rekey_decrypt();
-
-                    payload_cipher_state.decrypt_buffer.set(
-                        noheap::make_span(unit.buffer), unit.buffer.size());
-                    try {
-                        payload_cipher_state.decrypt(
-                            {reinterpret_cast<noheap::rbyte *>(&unit.header),
-                             sizeof(unit.header)});
-                    } catch (const noheap::runtime_error &excp) {
-                        session_info.log.throw_exception<protocol_error>("Invalid MAC.");
+                        unit.header = test_header;
                     }
-                }
 
-                ++decrypted_units_number;
-                break;
+                    // Tries to decrypt buffer data
+                    if (session_handshake_complete) {
+                        // Loop handling rekeys performed in the remote endpoint
+                        for (; session_info.receiver_key_iteration_number
+                               < unit.header.key_iteration_number;
+                             ++session_info.receiver_key_iteration_number)
+                            payload_cipher_state.rekey_decrypt();
+
+                        payload_cipher_state.decrypt_buffer.set(
+                            noheap::make_span(unit.buffer), unit.buffer.size());
+                        try {
+                            payload_cipher_state.decrypt(
+                                {reinterpret_cast<noheap::rbyte *>(&unit.header),
+                                 sizeof(unit.header)});
+                        } catch (const noheap::runtime_error &excp) {
+                            session_info.log.throw_exception<protocol_error>(
+                                "Invalid MAC.");
+                        }
+                    }
+
+                    ++decrypted_units_number;
+                    break;
+                }
             }
+
+            if (decrypted_units_number != batch_units_number)
+                session_info.log.throw_exception<protocol_error>(
+                    "Invalid header of units: {}", decrypted_units_number);
+        } catch (const protocol_error &excp) {
+            session_info.log.throw_exception<protocol_error>(
+                "Failed to decrypt last batch: {}", excp.what());
         }
 
-        if (decrypted_units_number != batch_units_number)
-            session_info.log.throw_exception<protocol_error>(
-                "Invalid header of units: {}", decrypted_units_number);
-    } catch (const protocol_error &excp) {
-        session_info.log.throw_exception<protocol_error>(
-            "Failed to decrypt last batch: {}", excp.what());
+        // Restores order of units in batch
+        std::sort(pckt->units.begin(), pckt->units.end(),
+                  [](const auto &el_left, const auto &el_right) {
+                      return el_left.header.number < el_right.header.number;
+                  });
+
+        check_packet_compliance(session_info, pckt);
+
+        // If handshake is completed and the packet has a control unit retry
+        if (session_handshake_complete
+            && control_unit_type == unit_type::unit_type_enum::retry)
+            session_info.was_received_retry = true;
+
+        // Handles the packet like handshake message if necessary
+        if (session_info.handshake_context.get_action()
+                == noise::noise_action::READ_MESSAGE
+            && is_control_session_unit_type(control_unit_type))
+            session_info.handshake_context.handle_packet(std::move(pckt));
     }
-
-    // Restores order of units in batch
-    std::sort(pckt->units.begin(), pckt->units.end(),
-              [](const auto &el_left, const auto &el_right) {
-                  return el_left.header.number < el_right.header.number;
-              });
-
-    check_packet_compliance(session_info, pckt);
-    ++session_info.batch_received_number;
 
     // Updates session's remote endpoint
     {
@@ -322,19 +332,8 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
             session_info.remote_endpoint = pckt.get_endpoint();
         session_info.update_dynamic_owner();
     }
-    control_unit_type = get_control_unit(pckt).header.type;
 
-    // If handshake is completed and the packet has a control unit retry
-    if (session_handshake_complete
-        && control_unit_type == unit_type::unit_type_enum::retry)
-        session_info.was_received_retry = true;
-    else if (control_unit_type == unit_type::unit_type_enum::session_confirmed)
-        session_info.was_received_confirmed = true;
-
-    // Handles the packet like handshake message if necessary
-    if (session_info.handshake_context.get_action() == noise::noise_action::READ_MESSAGE
-        && is_control_session_unit_type(control_unit_type))
-        session_info.handshake_context.handle_packet(std::move(pckt));
+    ++session_info.batch_received_number;
     update_handshake_status(session_info);
 }
 void essu::protocol::start_handshake(session_info_type &session_info) {
@@ -407,6 +406,11 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
             header_cipher_state.get_encrypt_counter_block() - batch_units_number);
         session_info.receiver_unit_number += min_unit_number;
         return true;
+    } else if (session_info.remote_endpoint.address == pckt.get_endpoint().address
+               && session_handshake_complete
+               && session_info.batch_received_number < skip_batch_window_number) {
+        session_info.predicted_skip_batch = true;
+        return true;
     }
 
     header_cipher_state.set_encrypt_counter_block(
@@ -426,8 +430,7 @@ void essu::protocol::update_handshake_status(session_info_type &session_info) no
         session_info.handshake_status =
             session_info_type::handshake_status_enum::COMPLETE;
         ++session_info.handshake_number;
-    } else if (action == noise::noise_action::SPLIT && session_info.was_sent_confirmed
-               && session_info.was_received_confirmed)
+    } else if (action == noise::noise_action::SPLIT)
         session_info.handshake_status = session_info_type::handshake_status_enum::STOP;
     else if (action == noise::noise_action::WRITE_MESSAGE
              || action == noise::noise_action::READ_MESSAGE)
