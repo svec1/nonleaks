@@ -146,11 +146,6 @@ constexpr TReturn represent_bytes(TSource &&buffer) noexcept {
     return *reinterpret_cast<std::decay_t<TReturn> *>(&buffer);
 }
 
-template<Buffer TSource>
-std::span<buffer_value_type<TSource>> make_span(TSource &&buffer) noexcept {
-    return {buffer};
-}
-
 class const_error : public std::exception {
 public:
     const_error(const std::string_view _what_str) noexcept : what_str(_what_str) {}

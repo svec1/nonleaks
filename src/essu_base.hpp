@@ -142,8 +142,7 @@ inline decltype(auto) get_control_unit(T &&pckt) {
 inline bool is_control_session_unit_type(unit_type::unit_type_enum type) {
     return type == unit_type::unit_type_enum::session_request
            || type == unit_type::unit_type_enum::session_created
-           || type == unit_type::unit_type_enum::session_confirmed
-           || type == unit_type::unit_type_enum::retry;
+           || type == unit_type::unit_type_enum::session_confirmed;
 }
 inline bool is_control_payload_packet_type(const packet_type &pckt) {
     return get_control_unit(pckt).header.type == unit_type::unit_type_enum::data;
@@ -164,10 +163,11 @@ inline bool is_handshake_packet(const packet_type &pckt) {
            && pckt->units[3].header.type == unit_type::unit_type_enum::dummy;
 }
 inline bool is_posthandshake_packet(const packet_type &pckt) {
-    return get_control_unit(pckt).header.type == unit_type::unit_type_enum::dummy
+    return (get_control_unit(pckt).header.type == unit_type::unit_type_enum::dummy
+            || get_control_unit(pckt).header.type == unit_type::unit_type_enum::retry)
            && !is_control_session_unit_type(pckt->units[0].header.type)
            && !is_control_session_unit_type(pckt->units[1].header.type)
-           && pckt->units[3].header.type == unit_type::unit_type_enum::dummy;
+           && !is_control_session_unit_type(pckt->units[3].header.type);
 }
 inline void set_control_session_packet(packet_type              &pckt,
                                        unit_type::unit_type_enum type) {

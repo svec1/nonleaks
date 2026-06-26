@@ -97,8 +97,6 @@ private:
     buffer_unique_value_type                      unique_value_previous{};
     std::uint16_t                                 available_batch_number{};
     std::uint64_t                                 handshake_id{};
-
-    buffer_current_state_hash_type current_state_hash{};
 };
 
 } // namespace essu
@@ -121,14 +119,13 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     if (!fragmentation) {
         // Generates random value
         if (status == status_enum::HS3) {
-            random_state.padding_buffer.set(noheap::make_span(handshake_payload), 0);
+            random_state.padding_buffer.set(handshake_payload, 0);
             random_state.pad();
-            noise_context.get_handshake_payload_buffer().set(
-                noheap::make_span(handshake_payload), handshake_payload.size());
+            noise_context.get_handshake_payload_buffer().set(handshake_payload,
+                                                             handshake_payload.size());
         }
 
-        noise_context.get_handshake_buffer().set(
-            noheap::make_span(buffer_handshake_message), 0);
+        noise_context.get_handshake_buffer().set(buffer_handshake_message, 0);
         noise_context.set_handshake_message();
     }
 
@@ -202,12 +199,10 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
 
     if (status == status_enum::HS3)
         // Sets buffer to get random value
-        noise_context.get_handshake_payload_buffer().set(
-            noheap::make_span(handshake_payload), 0);
+        noise_context.get_handshake_payload_buffer().set(handshake_payload, 0);
 
     // Sets noise message
-    noise_context.get_handshake_buffer().set(noheap::make_span(buffer_handshake_message),
-                                             payload_size);
+    noise_context.get_handshake_buffer().set(buffer_handshake_message, payload_size);
     noise_context.get_handshake_message();
 
     buffer_handshake_message    = {};
@@ -251,7 +246,8 @@ std::uint16_t essu::noise_handshake_context::get_available_batch_number() const 
 }
 essu::noise_handshake_context::buffer_current_state_hash_type
     essu::noise_handshake_context::get_current_state_hash() {
-    const auto xor_buffers = [](std::span<noheap::rbyte>       buffer1,
+    buffer_current_state_hash_type current_state_hash{};
+    const auto                     xor_buffers = [](std::span<noheap::rbyte>       buffer1,
                                 std::span<const noheap::rbyte> buffer2) {
         std::transform(
             buffer1.begin(),
@@ -272,20 +268,18 @@ essu::noise_handshake_context::buffer_current_state_hash_type
                     handshake_id));
     if (header_cipher_state_sender.has_encrypt_key()
         && header_cipher_state_receiver.has_encrypt_key()) {
-        xor_buffers(current_state_hash,
-                    noheap::make_span(header_cipher_state_sender.get_encrypt_nonce()));
-        xor_buffers(current_state_hash,
-                    noheap::make_span(header_cipher_state_receiver.get_encrypt_nonce()));
+        xor_buffers(current_state_hash, header_cipher_state_sender.get_encrypt_nonce());
+        xor_buffers(current_state_hash, header_cipher_state_receiver.get_encrypt_nonce());
 
         {
             noise::buffer_type<sizeof(current_state_hash) + noise_config.mac_size>
                 value_tmp1{}, value_tmp2{};
 
             header_cipher_state_sender.encrypt_buffer.set(
-                noheap::make_span(value_tmp1), value_tmp1.size() - noise_config.mac_size);
+                value_tmp1, value_tmp1.size() - noise_config.mac_size);
             header_cipher_state_sender.encrypt({});
             header_cipher_state_receiver.encrypt_buffer.set(
-                noheap::make_span(value_tmp2), value_tmp2.size() - noise_config.mac_size);
+                value_tmp2, value_tmp2.size() - noise_config.mac_size);
             header_cipher_state_receiver.encrypt({});
             header_cipher_state_sender.set_encrypt_counter_block(
                 header_cipher_state_sender.get_encrypt_counter_block() - 1);
@@ -297,15 +291,11 @@ essu::noise_handshake_context::buffer_current_state_hash_type
         }
     }
     if (payload_cipher_state.has_encrypt_key()) {
-        xor_buffers(current_state_hash,
-                    noheap::make_span(payload_cipher_state.get_encrypt_nonce()));
-        xor_buffers(current_state_hash,
-                    noheap::make_span(payload_cipher_state.get_decrypt_nonce()));
+        xor_buffers(current_state_hash, payload_cipher_state.get_encrypt_nonce());
+        xor_buffers(current_state_hash, payload_cipher_state.get_decrypt_nonce());
     }
 
-    current_state_hash = current_state_hash_state.get_hash(
-        noheap::make_span(hash_state.get_hash(noheap::make_span(current_state_hash))));
-    return current_state_hash;
+    return current_state_hash_state.get_hash(hash_state.get_hash(current_state_hash));
 }
 std::uint64_t essu::noise_handshake_context::get_handshake_id() const {
     return handshake_id;
@@ -410,16 +400,14 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     }
 
     // Gets 32 bytes-hash of public key
-    auto public_key_hash =
-        noheap::clip_buffer<32, 0>(hash_state.get_hash(noheap::make_span(public_key)));
+    auto public_key_hash = noheap::clip_buffer<32, 0>(hash_state.get_hash(public_key));
 
     // Generates keystream
     noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 2
                        + sizeof(std::uint64_t) + noise_config.mac_size>
                                      keystream{};
     noise_context_type::cipher_state cipher_tmp;
-    cipher_tmp.encrypt_buffer.set(noheap::make_span(keystream),
-                                  keystream.size() - noise_config.mac_size);
+    cipher_tmp.encrypt_buffer.set(keystream, keystream.size() - noise_config.mac_size);
     cipher_tmp.set_encrypt_key(public_key_hash);
     cipher_tmp.encrypt({});
 
@@ -461,9 +449,7 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
 
     // Generates unique values
     std::decay_t<decltype(handshake_hash)> unique_value_two;
-    hash_state.hkdf(noheap::make_span(handshake_hash),
-                    noheap::make_span(handshake_payload), noheap::make_span(unique_value),
-                    noheap::make_span(unique_value_two));
+    hash_state.hkdf(handshake_hash, handshake_payload, unique_value, unique_value_two);
 
     // Handles the first unique_value
     {
@@ -509,7 +495,7 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
         cipher_tmp.set_encrypt_key(
             noheap::clip_buffer<noheap::buffer_size<noise_context_type::buffer_key_type>,
                                 0>(unique_value_two));
-        cipher_tmp.encrypt_buffer.set(noheap::make_span(keystream),
+        cipher_tmp.encrypt_buffer.set(keystream,
                                       keystream.size() - noise_config.mac_size);
         cipher_tmp.encrypt({});
 

@@ -353,8 +353,8 @@ public:
         void init(cipher_state &&other);
         void dump();
 
-        void encrypt(std::span<noheap::rbyte> buffer_ad);
-        void decrypt(std::span<noheap::rbyte> buffer_ad);
+        void encrypt(std::span<const noheap::rbyte> buffer_ad);
+        void decrypt(std::span<const noheap::rbyte> buffer_ad);
         void rekey_encrypt();
         void rekey_decrypt();
 
@@ -439,7 +439,7 @@ public:
         ~hash_state();
 
     public:
-        buffer_type get_hash(std::span<noheap::rbyte> buffer) const;
+        buffer_type get_hash(std::span<const noheap::rbyte> buffer) const;
 
         void hkdf(std::span<const noheap::rbyte> buffer,
                   std::span<const noheap::rbyte> key, std::span<noheap::rbyte> output1,
@@ -579,23 +579,23 @@ noise::noise_context<_config>::cipher_state::~cipher_state() {
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::encrypt(
-    std::span<noheap::rbyte> buffer_ad) {
+    std::span<const noheap::rbyte> buffer_ad) {
     check_encrypt_key();
     std::size_t ret;
 
     if ((ret = noise_cipherstate_encrypt_with_ad(
-             encrypt_state, reinterpret_cast<noheap::ubyte *>(buffer_ad.data()),
+             encrypt_state, reinterpret_cast<const noheap::ubyte *>(buffer_ad.data()),
              buffer_ad.size(), &encrypt_buffer.get()))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to encrypt.");
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::decrypt(
-    std::span<noheap::rbyte> buffer_ad) {
+    std::span<const noheap::rbyte> buffer_ad) {
     check_decrypt_key();
     std::size_t ret;
     if ((ret = noise_cipherstate_decrypt_with_ad(
-             decrypt_state, reinterpret_cast<noheap::ubyte *>(buffer_ad.data()),
+             decrypt_state, reinterpret_cast<const noheap::ubyte *>(buffer_ad.data()),
              buffer_ad.size(), &decrypt_buffer.get()))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to decrypt.");
@@ -842,11 +842,11 @@ template<noise::noise_context_config _config>
 template<noise::hash_type _hash>
 noise::noise_context<_config>::hash_state<_hash>::buffer_type
     noise::noise_context<_config>::hash_state<_hash>::get_hash(
-        std::span<noheap::rbyte> buffer) const {
+        std::span<const noheap::rbyte> buffer) const {
     decltype(get_hash(buffer)) buffer_tmp{};
     std::size_t                ret;
     if ((ret = noise_hashstate_hash_one(
-             hashstate, reinterpret_cast<noheap::ubyte *>(buffer.data()), buffer.size(),
+             hashstate, reinterpret_cast<const noheap::ubyte *>(buffer.data()), buffer.size(),
              reinterpret_cast<noheap::ubyte *>(buffer_tmp.data()), buffer_tmp.size()))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to get hash.");

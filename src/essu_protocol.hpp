@@ -106,8 +106,6 @@ private:
     static inline void update_handshake_status(session_info_type &session_info) noexcept;
     static inline void check_packet_compliance(const session_info_type &session_info,
                                                const packet_type       &pckt);
-    static inline void check_protocol_compliance(const session_info_type &session_info,
-                                                 bool                     receive);
     static inline noise::buffer_type<header_data_size> derive_header_obfs_key(
         typename noise_context_type::cipher_state &header_cipher_state);
 };
@@ -125,7 +123,6 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
         (session_info.handshake_status
          == session_info_type::handshake_status_enum::COMPLETE);
 
-    check_protocol_compliance(session_info, false);
     check_packet_compliance(session_info, pckt);
 
     try {
@@ -145,9 +142,8 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
             session_info.was_sent_retry = true;
         }
 
-        // Forces control and last unit to be dummy
-        if (!is_control_session_unit_type(control_unit_type))
-            control_unit_type = unit_type::unit_type_enum::dummy;
+        // Forces last unit to be dummy
+        get_last_unit(pckt).header.type = unit_type::unit_type_enum::dummy;
 
         pckt.set_endpoint(session_info.remote_endpoint);
 
@@ -187,14 +183,13 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
                 }
 
                 // Adds random padding after payload data
-                random_state.padding_buffer.set(noheap::make_span(unit.buffer),
-                                                payload_size);
+                random_state.padding_buffer.set(unit.buffer, payload_size);
                 random_state.pad();
             }
 
             // Encrypts buffer data and authenticates based on the header
             if (session_handshake_complete) {
-                payload_cipher_state.encrypt_buffer.set(noheap::make_span(unit.buffer),
+                payload_cipher_state.encrypt_buffer.set(unit.buffer,
                                                         unit.buffer_size_without_mac());
                 payload_cipher_state.encrypt(
                     {reinterpret_cast<noheap::rbyte *>(&unit.header),
@@ -234,8 +229,6 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
     bool           session_handshake_complete =
         (session_info.handshake_status
          == session_info_type::handshake_status_enum::COMPLETE);
-
-    check_protocol_compliance(session_info, true);
 
     if (session_info.predicted_skip_batch) {
         session_info.predicted_skip_batch = false;
@@ -279,8 +272,8 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
                              ++session_info.receiver_key_iteration_number)
                             payload_cipher_state.rekey_decrypt();
 
-                        payload_cipher_state.decrypt_buffer.set(
-                            noheap::make_span(unit.buffer), unit.buffer.size());
+                        payload_cipher_state.decrypt_buffer.set(unit.buffer,
+                                                                unit.buffer.size());
                         try {
                             payload_cipher_state.decrypt(
                                 {reinterpret_cast<noheap::rbyte *>(&unit.header),
@@ -314,8 +307,9 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
 
         // If handshake is completed and the packet has a control unit retry
         if (session_handshake_complete
-            && control_unit_type == unit_type::unit_type_enum::retry)
+            && control_unit_type == unit_type::unit_type_enum::retry) {
             session_info.was_received_retry = true;
+        }
 
         // Handles the packet like handshake message if necessary
         if (session_info.handshake_context.get_action()
@@ -337,6 +331,10 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
     update_handshake_status(session_info);
 }
 void essu::protocol::start_handshake(session_info_type &session_info) {
+    if (session_info.handshake_number == max_available_handshake_number)
+        session_info.log.throw_exception<protocol_error>(
+            "Limit of handshakes has been reached.");
+
     session_info.reset_state();
     session_info.handshake_context.start();
     update_handshake_status(session_info);
@@ -406,16 +404,19 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
             header_cipher_state.get_encrypt_counter_block() - batch_units_number);
         session_info.receiver_unit_number += min_unit_number;
         return true;
-    } else if (session_info.remote_endpoint.address == pckt.get_endpoint().address
-               && session_handshake_complete
-               && session_info.batch_received_number < skip_batch_window_number) {
-        session_info.predicted_skip_batch = true;
-        return true;
     }
 
     header_cipher_state.set_encrypt_counter_block(
         header_cipher_state.get_encrypt_counter_block()
         - (possible_unit_number - session_info.receiver_unit_number));
+
+    if (session_info.remote_endpoint.address == pckt.get_endpoint().address
+        && session_info.handshake_number
+        && (session_info.batch_received_number < skip_batch_window_number
+            || session_info.was_received_retry)) {
+        session_info.predicted_skip_batch = true;
+        return true;
+    }
     return false;
 }
 essu::noise_handshake_context::buffer_current_state_hash_type
@@ -436,9 +437,10 @@ void essu::protocol::update_handshake_status(session_info_type &session_info) no
              || action == noise::noise_action::READ_MESSAGE)
         session_info.handshake_status =
             session_info_type::handshake_status_enum::EXCHANGE;
-    else if (session_info.handshake_status
-                 == session_info_type::handshake_status_enum::COMPLETE
-             && session_info.was_sent_retry && session_info.was_received_retry)
+
+    if (session_info.handshake_status
+            == session_info_type::handshake_status_enum::COMPLETE
+        && session_info.was_sent_retry && session_info.was_received_retry)
         session_info.handshake_status = session_info_type::handshake_status_enum::START;
 }
 void essu::protocol::check_packet_compliance(const session_info_type &session_info,
@@ -452,29 +454,12 @@ void essu::protocol::check_packet_compliance(const session_info_type &session_in
         session_info.log.throw_exception<protocol_error>(
             "Invalid packet setting for handshake.");
 }
-void essu::protocol::check_protocol_compliance(const session_info_type &session_info,
-                                               bool                     receive) {
-    if (session_info.handshake_number == max_available_handshake_number)
-        session_info.log.throw_exception<protocol_error>(
-            "Limit of handshakes has been reached.");
-    if (session_info.handshake_status
-            == session_info_type::handshake_status_enum::COMPLETE
-        && (receive
-                ? (session_info.was_received_retry
-                   || session_info.batch_received_number
-                          == session_info.handshake_context.get_available_batch_number())
-                : (session_info.was_sent_retry
-                   || session_info.batch_sent_number
-                          == session_info.handshake_context
-                                 .get_available_batch_number())))
-        session_info.log.throw_exception<protocol_error>("Expected to rehandshake.");
-}
 noise::buffer_type<essu::header_data_size> essu::protocol::derive_header_obfs_key(
     typename noise_context_type::cipher_state &header_cipher_state) {
     noise::buffer_type<sizeof(typename essu::unit_type::header_data_type)
                        + noise_config.mac_size>
         obfs_key_tmp{};
-    header_cipher_state.encrypt_buffer.set(noheap::make_span(obfs_key_tmp),
+    header_cipher_state.encrypt_buffer.set(obfs_key_tmp,
                                            obfs_key_tmp.size() - noise_config.mac_size);
     header_cipher_state.encrypt({});
 
