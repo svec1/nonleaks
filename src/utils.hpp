@@ -146,6 +146,16 @@ constexpr TReturn represent_bytes(TSource &&buffer) noexcept {
     return *reinterpret_cast<std::decay_t<TReturn> *>(&buffer);
 }
 
+template<Buffer TSource_one, Buffer TSource_two, typename Func>
+    requires std::same_as<buffer_value_type<TSource_one>, buffer_value_type<TSource_two>>
+void transform_buffers(TSource_one &&buffer_one, TSource_two &&buffer_two, Func &&func) {
+    std::transform(buffer_one.begin(),
+                   buffer_one.begin()
+                       + std::clamp<std::size_t>(buffer_one.size(), buffer_one.size(),
+                                                 buffer_two.size()),
+                   buffer_two.begin(), buffer_one.begin(), func);
+}
+
 class const_error : public std::exception {
 public:
     const_error(const std::string_view _what_str) noexcept : what_str(_what_str) {}

@@ -203,7 +203,7 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
             }
 
             // Adds header data obfuscation
-            std::transform(
+			std::transform(
                 reinterpret_cast<noheap::rbyte *>(&unit.header),
                 reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
                 derive_header_obfs_key(header_cipher_state).data(),
@@ -342,6 +342,7 @@ void essu::protocol::start_handshake(session_info_type &session_info) {
 void essu::protocol::stop_handshake(session_info_type &session_info) {
     session_info.reset_state();
     session_info.handshake_context.stop();
+    ++session_info.handshake_number;
     update_handshake_status(session_info);
 }
 std::uint64_t
@@ -412,8 +413,7 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
 
     if (session_info.remote_endpoint.address == pckt.get_endpoint().address
         && session_info.handshake_number
-        && (session_info.batch_received_number < skip_batch_window_number
-            || session_info.was_received_retry)) {
+        && session_info.batch_received_number < skip_batch_window_number) {
         session_info.predicted_skip_batch = true;
         return true;
     }
@@ -427,11 +427,10 @@ essu::noise_handshake_context::buffer_current_state_hash_type
 void essu::protocol::update_handshake_status(session_info_type &session_info) noexcept {
     auto action = session_info.handshake_context.get_action();
     if (action == noise::noise_action::NONE
-        && session_info.handshake_context.is_complete()) {
+        && session_info.handshake_context.is_complete())
         session_info.handshake_status =
             session_info_type::handshake_status_enum::COMPLETE;
-        ++session_info.handshake_number;
-    } else if (action == noise::noise_action::SPLIT)
+    else if (action == noise::noise_action::SPLIT)
         session_info.handshake_status = session_info_type::handshake_status_enum::STOP;
     else if (action == noise::noise_action::WRITE_MESSAGE
              || action == noise::noise_action::READ_MESSAGE)
