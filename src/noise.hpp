@@ -446,7 +446,7 @@ public:
                   std::span<noheap::rbyte> output2) const;
 
     private:
-		// This is so because interface of this class does not imply an update function
+        // This is so because interface of this class does not imply an update function
         mutable NoiseHashState *hashstate = nullptr;
     };
 
@@ -846,8 +846,9 @@ noise::noise_context<_config>::hash_state<_hash>::buffer_type
     decltype(get_hash(buffer)) buffer_tmp{};
     std::size_t                ret;
     if ((ret = noise_hashstate_hash_one(
-             hashstate, reinterpret_cast<const noheap::ubyte *>(buffer.data()), buffer.size(),
-             reinterpret_cast<noheap::ubyte *>(buffer_tmp.data()), buffer_tmp.size()))
+             hashstate, reinterpret_cast<const noheap::ubyte *>(buffer.data()),
+             buffer.size(), reinterpret_cast<noheap::ubyte *>(buffer_tmp.data()),
+             buffer_tmp.size()))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to get hash.");
 
@@ -876,6 +877,7 @@ noise::noise_context<_config>::~noise_context<_config>() {
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::init(noise_role role) {
     std::size_t ret;
+    this->dump();
     cipher_st.dump();
 
     if ((ret = noise_handshakestate_new_by_id(&handshakestate, &nid_static,
@@ -885,10 +887,9 @@ void noise::noise_context<_config>::init(noise_role role) {
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::dump() {
-    if (!handshakestate)
-        return;
+    if (handshakestate)
+        noise_handshakestate_free(handshakestate);
 
-    noise_handshakestate_free(handshakestate);
     handshakestate           = nullptr;
     handshake_buffer         = {};
     handshake_payload_buffer = {};

@@ -280,8 +280,6 @@ const essu::noise_context_type::buffer_key_type &
 }
 
 void essu::noise_handshake_context::start() {
-    check_noise_action(noise::noise_action::NONE);
-
     status                      = status_enum::HS1;
     offset_noise_handshake_unit = 0;
     fragmentation               = false;
@@ -325,7 +323,6 @@ void essu::noise_handshake_context::stop() {
 
     status = status_enum(static_cast<std::size_t>(status) + 1);
 }
-
 void essu::noise_handshake_context::check_noise_action(noise::noise_action expected) {
     auto action = noise_context.get_action();
 
