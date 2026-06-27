@@ -435,9 +435,17 @@ void essu::protocol::update_handshake_status(session_info_type &session_info) no
         session_info.handshake_status =
             session_info_type::handshake_status_enum::EXCHANGE;
 
+    // If retry packet exchange is reproduced after handshake
     if (session_info.handshake_status
             == session_info_type::handshake_status_enum::COMPLETE
         && session_info.was_sent_retry && session_info.was_received_retry)
+        session_info.handshake_status = session_info_type::handshake_status_enum::START;
+
+    // If during handshake batch sent number has been reached to max
+    if (session_info.handshake_status
+            == session_info_type::handshake_status_enum::EXCHANGE
+        && (session_info.batch_sent_number == max_batch_handshake_number
+            || session_info.batch_received_number == max_batch_handshake_number))
         session_info.handshake_status = session_info_type::handshake_status_enum::START;
 }
 void essu::protocol::check_packet_compliance(const session_info_type &session_info,
