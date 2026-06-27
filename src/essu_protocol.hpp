@@ -44,7 +44,6 @@ private:
         receiver_unit_number          = 0;
         sender_key_iteration_number   = 0;
         receiver_key_iteration_number = 0;
-        undecrypted_batch_number      = 0;
         was_sent_retry                = false;
         was_received_retry            = false;
     }
@@ -71,7 +70,6 @@ private:
     std::uint32_t receiver_unit_number;
     std::uint32_t sender_key_iteration_number;
     std::uint32_t receiver_key_iteration_number;
-    std::uint32_t undecrypted_batch_number;
     bool          was_sent_retry;
     bool          was_received_retry;
 
@@ -203,7 +201,7 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
             }
 
             // Adds header data obfuscation
-			std::transform(
+            std::transform(
                 reinterpret_cast<noheap::rbyte *>(&unit.header),
                 reinterpret_cast<noheap::rbyte *>(&unit.header) + sizeof(unit.header),
                 derive_header_obfs_key(header_cipher_state).data(),

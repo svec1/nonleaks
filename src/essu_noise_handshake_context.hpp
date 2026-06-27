@@ -417,10 +417,13 @@ void essu::noise_handshake_context::generate_posthandshake_unique_values() {
 
     // Handles the first unique_value
     {
+        available_batch_number = 64;
+        /*
         available_batch_number = std::clamp<std::uint16_t>(
             noheap::represent_bytes<std::uint16_t>(
                 noheap::clip_buffer<sizeof(std::uint16_t), 0>(unique_value)),
             min_available_batch_number, std::uint16_t(max_available_batch_number));
+        */
         handshake_id ^= noheap::represent_bytes<std::uint64_t>(
             noheap::clip_buffer<sizeof(std::uint64_t), sizeof(std::uint16_t)>(
                 unique_value));

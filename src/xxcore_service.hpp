@@ -116,7 +116,7 @@ void xxcore_service::run() {
                         essu::set_dummy_packet(pckt);
                         act.push_packet({pckt, session_info});
                     }
-                    if (act.exist_received_packets())
+                    while (act.exist_received_packets())
                         act.pop_packet();
 
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
