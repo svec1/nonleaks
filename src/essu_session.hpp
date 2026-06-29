@@ -268,7 +268,7 @@ void essu::session_handler::add_endpoint_config_internal(
 void essu::session_handler::add_session_internal(
     const endpoint_config_type &endpoint_config) {
     if (session_s.size() == max_session_number)
-        log.throw_exception<session_error>("Failed to register session.");
+        log.throw_exception<session_error>("Failed to add session.");
 
     // Creates new session with this config
     decltype(auto) endpoint_config_it =

@@ -339,7 +339,7 @@ protected:
     template<typename T>
         requires std::is_pointer<T>::value
     T malloc(std::size_t area_size) {
-        if (offset + area_size >= this->buffer_size())
+        if (offset + area_size > this->buffer_size())
             throw logic_error("Pseudoheap is full. Last request: {}", area_size);
 
         typename basic_array_type::value_type *ptr = this->array.buffer.data() + offset;

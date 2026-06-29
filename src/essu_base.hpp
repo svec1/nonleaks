@@ -16,13 +16,14 @@ constexpr std::size_t batch_units_number         = 4;
 constexpr std::size_t control_unit_number        = 3;
 constexpr std::size_t unit_per_rekey_number      = 6;
 constexpr std::size_t batch_window_number        = 256;
-constexpr std::size_t skip_batch_window_number   = 16;
-constexpr std::size_t max_batch_handshake_number = 30;
-constexpr std::size_t min_available_batch_number = 1024;
+constexpr std::size_t skip_batch_window_number   = 80;
+constexpr std::size_t max_batch_handshake_number = 48;
+constexpr std::size_t min_available_batch_number = 10240;
 constexpr std::size_t max_available_batch_number =
-    (std::uint32_t(-1) - 3) / batch_units_number;
+    (std::uint32_t(-1) - skip_batch_window_number) / batch_units_number;
 constexpr std::size_t max_available_handshake_number = std::uint16_t(-1);
 constexpr std::size_t max_session_number             = 4;
+constexpr std::size_t sent_handshake_batch_factor    = 50;
 constexpr std::size_t unit_size                      = packet_size / batch_units_number;
 constexpr std::size_t buffer_data_size               = unit_size - header_data_size;
 constexpr std::size_t payload_data_size = buffer_data_size - min_random_bytes_number;

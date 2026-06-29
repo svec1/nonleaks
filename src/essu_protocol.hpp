@@ -35,6 +35,10 @@ protected:
 public:
     decltype(auto) get_remote_endpoint() const noexcept { return remote_endpoint; }
     decltype(auto) get_log() const noexcept { return log; }
+    bool           payload_stream_is_available() const noexcept {
+        return handshake_status == handshake_status_enum::COMPLETE && !was_sent_retry
+               && !was_received_retry;
+    }
 
 private:
     void reset_state() noexcept {
@@ -46,6 +50,7 @@ private:
         receiver_key_iteration_number = 0;
         was_sent_retry                = false;
         was_received_retry            = false;
+        predicted_skip_batch          = false;
     }
     void update_dynamic_owner() {
         log.set_dynamic_owner(
@@ -72,8 +77,7 @@ private:
     std::uint32_t receiver_key_iteration_number;
     bool          was_sent_retry;
     bool          was_received_retry;
-
-    bool predicted_skip_batch{};
+    bool          predicted_skip_batch;
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -127,7 +131,8 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
         // Inits packet like handshake message if necessary
         if (session_info.handshake_context.get_action()
                 == noise::noise_action::WRITE_MESSAGE
-            && std::uniform_int_distribution(0, 1)(random_state.generator))
+            && std::uniform_int_distribution<std::size_t>(1, 100)(random_state.generator)
+                   >= sent_handshake_batch_factor)
             session_info.handshake_context.init_packet(pckt);
 
         // If retry or available batch number is reached
@@ -409,8 +414,7 @@ bool essu::protocol::check_affiliation_packet(session_info_type &session_info,
         header_cipher_state.get_encrypt_counter_block()
         - (possible_unit_number - session_info.receiver_unit_number));
 
-    if (session_info.remote_endpoint.address == pckt.get_endpoint().address
-        && session_info.handshake_number
+    if (session_info.remote_endpoint == pckt.get_endpoint()
         && session_info.batch_received_number < skip_batch_window_number) {
         session_info.predicted_skip_batch = true;
         return true;
