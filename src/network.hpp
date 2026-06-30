@@ -276,11 +276,8 @@ void udp_stream<Action>::register_async_send() {
             typename action_type::packet_type pckt{};
             this->act.init_packet(pckt);
 
-            if (pckt.get_endpoint().address == buffer_address_type{})
-                return;
-
             // Sends the packet
-            {
+            if (pckt.get_endpoint().address != buffer_address_type{}) {
                 std::lock_guard<std::mutex> m_lock(this->m);
                 system::error_code          ec;
                 auto                        native_remote_endpoint = pckt.get_endpoint();

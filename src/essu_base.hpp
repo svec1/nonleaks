@@ -61,9 +61,9 @@ public:
     static_assert(sizeof(header_data_type) == header_data_size, "Invalid header size.");
 
 public:
-    header_data_type header{};
+    header_data_type header;
 
-    noheap::buffer_bytes_type<buffer_data_size, noheap::rbyte> buffer{};
+    noheap::buffer_bytes_type<buffer_data_size, noheap::rbyte> buffer;
 };
 
 // Packet(Batch)
@@ -133,38 +133,38 @@ namespace utils {
 } // namespace utils
 
 template<Packet_type T>
-inline decltype(auto) get_last_unit(T &&pckt) {
+inline decltype(auto) get_last_unit(T &&pckt) noexcept {
     return pckt->units[batch_units_number - 1];
 }
 template<Packet_type T>
-inline decltype(auto) get_control_unit(T &&pckt) {
+inline decltype(auto) get_control_unit(T &&pckt) noexcept {
     return pckt->units[control_unit_number - 1];
 }
 
-inline bool is_control_session_unit_type(unit_type::unit_type_enum type) {
+inline bool is_control_session_unit_type(unit_type::unit_type_enum type) noexcept {
     return type == unit_type::unit_type_enum::session_request
            || type == unit_type::unit_type_enum::session_created
            || type == unit_type::unit_type_enum::session_confirmed;
 }
-inline bool is_control_payload_packet_type(const packet_type &pckt) {
+inline bool is_control_payload_packet_type(const packet_type &pckt) noexcept {
     return get_control_unit(pckt).header.type == unit_type::unit_type_enum::data;
 }
-inline bool is_control_session_packet_type(const packet_type &pckt) {
+inline bool is_control_session_packet_type(const packet_type &pckt) noexcept {
     return is_control_session_unit_type(get_control_unit(pckt).header.type);
 }
-inline bool is_dummy_packet(const packet_type &pckt) {
+inline bool is_dummy_packet(const packet_type &pckt) noexcept {
     return (pckt->units[0].header.type == pckt->units[1].header.type
             && pckt->units[1].header.type == pckt->units[2].header.type
             && pckt->units[2].header.type == pckt->units[3].header.type
             && pckt->units[3].header.type == unit_type::unit_type_enum::dummy);
 }
-inline bool is_handshake_packet(const packet_type &pckt) {
+inline bool is_handshake_packet(const packet_type &pckt) noexcept {
     return is_control_session_packet_type(pckt)
            && pckt->units[0].header.type == unit_type::unit_type_enum::dummy
            && pckt->units[1].header.type == unit_type::unit_type_enum::dummy
            && pckt->units[3].header.type == unit_type::unit_type_enum::dummy;
 }
-inline bool is_posthandshake_packet(const packet_type &pckt) {
+inline bool is_posthandshake_packet(const packet_type &pckt) noexcept {
     return (get_control_unit(pckt).header.type == unit_type::unit_type_enum::dummy
             || get_control_unit(pckt).header.type == unit_type::unit_type_enum::retry)
            && !is_control_session_unit_type(pckt->units[0].header.type)
@@ -172,13 +172,14 @@ inline bool is_posthandshake_packet(const packet_type &pckt) {
            && !is_control_session_unit_type(pckt->units[3].header.type);
 }
 inline void set_control_session_packet(packet_type              &pckt,
-                                       unit_type::unit_type_enum type) {
+                                       unit_type::unit_type_enum type) noexcept {
     if (!is_control_session_unit_type(type))
         return;
     get_control_unit(pckt).header.type = type;
 }
-inline void set_dummy_packet(packet_type &pckt) {
-    for (decltype(auto) unit : pckt->units)
+inline void set_dummy_packet(packet_type &pckt) noexcept {
+    pckt = {};
+	for (decltype(auto) unit : pckt->units)
         unit.header.type = unit_type::unit_type_enum::dummy;
 }
 

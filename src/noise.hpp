@@ -982,7 +982,8 @@ template<noise::noise_context_config _config>
 noise::noise_context<_config>::buffer_prologue_type
     noise::noise_context<_config>::get_prologue() {
     buffer_prologue_type buffer_tmp{};
-    std::copy(buffer_tmp.begin(), buffer_tmp.end(), reinterpret_cast<char *>(&prologue));
+    std::copy(reinterpret_cast<char *>(&prologue),
+              reinterpret_cast<char *>(&prologue) + sizeof(prologue), buffer_tmp.begin());
     return buffer_tmp;
 }
 template<noise::noise_context_config _config>

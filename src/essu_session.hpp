@@ -1,7 +1,7 @@
 #ifndef ESSU_SESSION_HPP
 #define ESSU_SESSION_HPP
 
-#include <mutex>
+#include <shared_mutex>
 
 #include "essu_protocol.hpp"
 
@@ -66,17 +66,18 @@ public:
     inline void add_session(const endpoint_config_type &endpoint_config);
     inline void delete_session(session_info_proxy_type _session_info);
     inline buffer_session_s_type &get_session_list();
-    inline noheap::runtime_error  get_error() const;
 
     inline void                 push_packet(packet_type_extended &&pckt);
     inline packet_type_extended pop_packet();
-    inline bool                 exist_received_packets() const;
+
+    inline bool                  is_valid() const;
+    inline bool                  exist_received_packets() const;
+    inline noheap::runtime_error get_error() const;
 
 public:
     inline void init_packet(packet_type &pckt);
     inline void handle_packet(packet_type &&pckt);
     inline void set_error(const noheap::runtime_error &_excp);
-    inline bool is_valid() const;
 
 private:
     inline void add_endpoint_config_internal(const endpoint_config_type &endpoint_config);
@@ -94,8 +95,8 @@ private:
     config_type                  &config;
     buffer_endpoint_config_s_type buffer_endpoint_config_s;
 
-    mutable std::mutex           m_run;
-    std::condition_variable      cv_io;
+    mutable std::shared_mutex    m_run;
+    std::condition_variable_any  cv_io;
     buffer_session_s_type        session_s;
     send_buffer_packet_s_type    send_buffer;
     receive_buffer_packet_s_type receive_buffer;
@@ -108,17 +109,17 @@ private:
 // Adds the passed endpoint config to internal buffer of endpoint configs
 void essu::session_handler::add_endpoint_config(
     const endpoint_config_type &endpoint_config) {
-    std::lock_guard<std::mutex> m_run_lock(m_run);
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
     add_endpoint_config_internal(endpoint_config);
 }
 // Adds a new session based on endpoint_config to internal buffer of sessions
 void essu::session_handler::add_session(const endpoint_config_type &endpoint_config) {
-    std::lock_guard<std::mutex> m_run_lock(m_run);
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
     add_session_internal(endpoint_config);
 }
 // Delete the passed session from internal buffer of sessions
 void essu::session_handler::delete_session(session_info_proxy_type _session_info) {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
     delete_session_internal(_session_info);
 }
 // Returns an internal buffer of sessions
@@ -127,12 +128,12 @@ essu::session_handler::buffer_session_s_type &essu::session_handler::get_session
 }
 // Returns a last error
 noheap::runtime_error essu::session_handler::get_error() const {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+    std::shared_lock<decltype(m_run)> m_run_lock(m_run);
     return excp;
 }
 // Pushes packet to internal send buffer of packets
 void essu::session_handler::push_packet(packet_type_extended &&pckt) {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
     if (!pckt.session_info_proxy.has_value())
         log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
@@ -153,7 +154,7 @@ void essu::session_handler::push_packet(packet_type_extended &&pckt) {
 }
 // Returns packet from internal receive buffer of packets
 essu::session_handler::packet_type_extended essu::session_handler::pop_packet() {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+    std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
     packet_type    pckt            = receive_buffer.pop_front();
     decltype(auto) session_info_it = session_s.end();
@@ -163,7 +164,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     for (decltype(auto) it = session_s.begin(); it < session_s.end(); ++it) {
         try {
             handle_session(*it);
-            if (protocol::check_affiliation_packet(*it, pckt)) {
+            if (protocol::determine_affiliation_packet(*it, pckt)) {
                 session_info_it = it;
                 break;
             }
@@ -195,7 +196,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
         session_info_it = session_s.end() - 1;
         try {
             handle_session(*session_info_it);
-            if (!protocol::check_affiliation_packet(*session_info_it, pckt)) {
+            if (!protocol::determine_affiliation_packet(*session_info_it, pckt)) {
                 session_info_it->get_log().to_all("Invalid packet.");
                 return {pckt, std::nullopt};
             }
@@ -214,14 +215,17 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     }
     session_info_it->last_received_ms = get_now_ms();
 
-    // Sets current session for possible work
     cv_io.notify_one();
 
     return {pckt, *session_info_it};
 }
 bool essu::session_handler::exist_received_packets() const {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
+    std::shared_lock<decltype(m_run)> m_run_lock(m_run);
     return receive_buffer.size();
+}
+bool essu::session_handler::is_valid() const {
+    std::shared_lock<decltype(m_run)> m_run_lock(m_run);
+    return !failed_io;
 }
 
 void essu::session_handler::init_packet(packet_type &pckt) {
@@ -249,11 +253,7 @@ void essu::session_handler::handle_packet(packet_type &&pckt) {
 void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
     handle_runtime_error(_excp);
-    cv_io.notify_one();
-}
-bool essu::session_handler::is_valid() const {
-    std::lock_guard<decltype(m_run)> m_run_lock(m_run);
-    return !failed_io;
+    cv_io.notify_all();
 }
 
 void essu::session_handler::add_endpoint_config_internal(
