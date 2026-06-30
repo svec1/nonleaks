@@ -257,6 +257,10 @@ public:
     using buffer_type                        = buffer_chars_type<buffer_size>;
 
 public:
+    error()                  = default;
+    error(const error &excp) = default;
+    error(buffer_type &&_buffer) noexcept : buffer(_buffer) { set = true; }
+
     template<typename... Args>
     error(std::format_string<Args...> format, Args &&...args) {
         if (format.get().size()) {
@@ -264,6 +268,8 @@ public:
                                            std::forward<Args>(args)...);
             *end_it.out = '\0';
         }
+
+        set = true;
     }
     template<typename... Args>
     error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
@@ -271,16 +277,11 @@ public:
         : error(format, std::forward<Args>(args)...) {
         set_owner(_buffer_owner);
     }
-    error(buffer_type &&_buffer) : buffer(std::move(_buffer)) {}
-    error() = default;
-    error(const error &excp) {
-        buffer = excp.buffer;
-        set_owner(excp.buffer_owner);
-    }
+
     ~error() override = default;
 
 public:
-    void set_owner(log_impl::owner_impl::buffer_type _buffer_owner) {
+    void set_owner(log_impl::owner_impl::buffer_type _buffer_owner) noexcept {
         buffer_owner = _buffer_owner;
         owner_set    = true;
     }
@@ -288,13 +289,14 @@ public:
 public:
     const char *what() const noexcept override { return buffer.data(); }
     log_impl::owner_impl::buffer_type get_owner() const noexcept { return buffer_owner; }
-    bool has_setting_owner() const noexcept { return owner_set; }
+    bool                              is_set() const noexcept { return set; }
+    bool                              owner_is_set() const noexcept { return owner_set; }
 
 private:
     buffer_type                       buffer{};
     log_impl::owner_impl::buffer_type buffer_owner{};
-
-    bool owner_set;
+    bool                              set{};
+    bool                              owner_set{};
 };
 
 class runtime_error : public error {

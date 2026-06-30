@@ -10,7 +10,7 @@ namespace essu {
 constexpr std::size_t timeout_ms                 = 7500;
 constexpr std::size_t keep_alive_ms              = 2500;
 constexpr std::size_t packet_size                = 1376;
-constexpr std::size_t header_data_size           = 24;
+constexpr std::size_t header_data_size           = 17;
 constexpr std::size_t min_random_bytes_number    = 32;
 constexpr std::size_t batch_units_number         = 4;
 constexpr std::size_t control_unit_number        = 3;
@@ -37,7 +37,7 @@ using noise_context_type = noise::noise_context<noise_config>;
 // Transport unit
 struct unit_type {
 public:
-    enum class unit_type_enum : std::uint64_t {
+    enum class unit_type_enum : std::uint8_t {
         session_request = 0,
         session_created,
         session_confirmed,
@@ -47,11 +47,11 @@ public:
         dummy,
     };
 
-    struct header_data_type {
+    struct [[gnu::packed]] header_data_type {
         std::uint64_t  connection_id;
-        unit_type_enum type;
         std::uint32_t  number;
         std::uint32_t  key_iteration_number;
+        unit_type_enum type;
     };
 
 public:
@@ -96,6 +96,8 @@ public:
 
         return session_info.value();
     }
+
+    bool has_session_info() const noexcept { return session_info.has_value(); }
 
 private:
     session_info_proxy_type session_info = std::nullopt;
@@ -179,7 +181,7 @@ inline void set_control_session_packet(packet_type              &pckt,
 }
 inline void set_dummy_packet(packet_type &pckt) noexcept {
     pckt = {};
-	for (decltype(auto) unit : pckt->units)
+    for (decltype(auto) unit : pckt->units)
         unit.header.type = unit_type::unit_type_enum::dummy;
 }
 

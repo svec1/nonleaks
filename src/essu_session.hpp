@@ -64,7 +64,7 @@ public:
 public:
     inline void add_endpoint_config(const endpoint_config_type &endpoint_config);
     inline void add_session(const endpoint_config_type &endpoint_config);
-    inline void delete_session(session_info_proxy_type _session_info);
+    inline void delete_session(const session_info_type_extended &session_info);
     inline buffer_session_s_type &get_session_list();
 
     inline void                 push_packet(packet_type_extended &&pckt);
@@ -82,9 +82,8 @@ public:
 private:
     inline void add_endpoint_config_internal(const endpoint_config_type &endpoint_config);
     inline void add_session_internal(const endpoint_config_type &endpoint_config);
-    inline void delete_session_internal(session_info_proxy_type _session_info);
-    inline void handle_session(session_info_proxy_type _session_info);
-    inline void handle_runtime_error(const noheap::runtime_error &_excp);
+    inline void delete_session_internal(const session_info_type_extended &session_info);
+    inline void handle_session(session_info_type_extended &session_info);
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -101,7 +100,6 @@ private:
     send_buffer_packet_s_type    send_buffer;
     receive_buffer_packet_s_type receive_buffer;
     noheap::runtime_error        excp;
-    bool                         failed_io = false;
 };
 
 } // namespace essu
@@ -118,9 +116,10 @@ void essu::session_handler::add_session(const endpoint_config_type &endpoint_con
     add_session_internal(endpoint_config);
 }
 // Delete the passed session from internal buffer of sessions
-void essu::session_handler::delete_session(session_info_proxy_type _session_info) {
+void essu::session_handler::delete_session(
+    const session_info_type_extended &session_info) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
-    delete_session_internal(_session_info);
+    delete_session_internal(session_info);
 }
 // Returns an internal buffer of sessions
 essu::session_handler::buffer_session_s_type &essu::session_handler::get_session_list() {
@@ -137,14 +136,14 @@ void essu::session_handler::push_packet(packet_type_extended &&pckt) {
 
     if (!pckt.session_info_proxy.has_value())
         log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
-    decltype(auto) session_info = pckt.session_info_proxy.value();
+    decltype(auto) session_info = pckt.session_info_proxy.value().get();
 
     // Prepares the packet
     try {
         handle_session(session_info);
         protocol::prepare(session_info, pckt);
     } catch (base_error &_excp) {
-        _excp.set_session_info(session_info);
+        _excp.set_session_info({session_info});
         throw;
     }
     send_buffer.push_back(pckt);
@@ -169,7 +168,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
                 break;
             }
         } catch (base_error &_excp) {
-            _excp.set_session_info(*it);
+            _excp.set_session_info({*session_info_it});
             throw;
         }
     }
@@ -185,6 +184,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
         if (it != buffer_endpoint_config_s.end()) {
             add_session_internal(*it);
         } else {
+            // Will delete!
             static endpoint_config_type config_tmp = {
                 {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
                 noise::noise_role::RESPONDER,
@@ -198,10 +198,10 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
             handle_session(*session_info_it);
             if (!protocol::determine_affiliation_packet(*session_info_it, pckt)) {
                 session_info_it->get_log().to_all("Invalid packet.");
-                return {pckt, std::nullopt};
+                return {pckt, *session_info_it};
             }
         } catch (base_error &_excp) {
-            _excp.set_session_info(*session_info_it);
+            _excp.set_session_info({*session_info_it});
             throw;
         }
     }
@@ -210,7 +210,7 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     try {
         protocol::handle(*session_info_it, pckt);
     } catch (base_error &_excp) {
-        _excp.set_session_info(*session_info_it);
+        _excp.set_session_info({*session_info_it});
         throw;
     }
     session_info_it->last_received_ms = get_now_ms();
@@ -225,15 +225,15 @@ bool essu::session_handler::exist_received_packets() const {
 }
 bool essu::session_handler::is_valid() const {
     std::shared_lock<decltype(m_run)> m_run_lock(m_run);
-    return !failed_io;
+    return !excp.is_set();
 }
 
 void essu::session_handler::init_packet(packet_type &pckt) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
     // Waits run-thread
-    cv_io.wait(m_run_lock, [this] { return failed_io || this->send_buffer.size(); });
-    if (failed_io)
+    cv_io.wait(m_run_lock, [this] { return excp.is_set() || this->send_buffer.size(); });
+    if (excp.is_set())
         return;
 
     pckt = send_buffer.pop_front();
@@ -242,17 +242,17 @@ void essu::session_handler::handle_packet(packet_type &&pckt) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
     cv_io.wait(m_run_lock, [this] {
-        return failed_io
+        return excp.is_set()
                || this->receive_buffer.size() < this->receive_buffer.buffer_size();
     });
-    if (failed_io)
+    if (excp.is_set())
         return;
 
     receive_buffer.push_back(pckt);
 }
 void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
-    handle_runtime_error(_excp);
+    excp = _excp;
     cv_io.notify_all();
 }
 
@@ -287,24 +287,16 @@ void essu::session_handler::add_session_internal(
     session_s[session_s.size() - 1].get_log().to_all("Session registered.");
 }
 void essu::session_handler::delete_session_internal(
-    session_info_proxy_type _session_info) {
-    if (!_session_info.has_value())
-        log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
-    decltype(auto) session_info = _session_info.value().get();
-
+    const session_info_type_extended &session_info) {
     session_info.get_log().to_all("Session removed.");
     session_s.erase(std::find_if(session_s.begin(), session_s.end(),
                                  [&session_info](const auto &_session_info) {
                                      return &session_info == &_session_info;
                                  }));
 }
-void essu::session_handler::handle_session(session_info_proxy_type _session_info) {
-    scope_guard sc([this] { this->cv_io.notify_all(); });
-    std::size_t now_ms = get_now_ms();
-
-    if (!_session_info.has_value())
-        log.throw_exception<noheap::runtime_error>("Invalid the passed session info.");
-    decltype(auto) session_info   = _session_info.value().get();
+void essu::session_handler::handle_session(session_info_type_extended &session_info) {
+    scope_guard    sc([this] { this->cv_io.notify_all(); });
+    std::size_t    now_ms         = get_now_ms();
     decltype(auto) session_status = protocol::get_handshake_status(session_info);
 
     // Tries to control session and handles possible errors
@@ -326,11 +318,6 @@ void essu::session_handler::handle_session(session_info_proxy_type _session_info
             std::string_view(
                 noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     }
-}
-
-void essu::session_handler::handle_runtime_error(const noheap::runtime_error &_excp) {
-    excp      = _excp;
-    failed_io = true;
 }
 
 #endif

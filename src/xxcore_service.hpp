@@ -121,9 +121,12 @@ void xxcore_service::run() {
 
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 } catch (essu::base_error &excp) {
-                    decltype(auto) session_info = excp.get_session_info().get();
-                    session_info.get_log().get_log_handler().to_all("{}", excp.what());
-                    act.delete_session(session_info);
+                    if (excp.has_session_info()) {
+                        decltype(auto) session_info = excp.get_session_info().get();
+                        session_info.get_log().get_log_handler().to_all("{}",
+                                                                        excp.what());
+                        act.delete_session(session_info);
+                    }
                 }
             }
             throw act.get_error();
