@@ -381,7 +381,7 @@ public:
         using buffer_private_key_type = buffer_type<get_private_key_size<dh>()>;
         using buffer_public_key_type  = buffer_type<get_public_key_size<dh>()>;
         using buffer_shared_secret_key_type =
-            buffer_type<get_shared_secret_key_size<config.dh>()>();
+            buffer_type<get_shared_secret_key_size<config.dh>()>;
 
     public:
         dh_state();
@@ -403,7 +403,7 @@ public:
         void       get_keypair(keypair_type &keypair);
 
     private:
-        NoiseDHState *dhstate;
+        NoiseDHState *dhstate = nullptr;
     };
 
     template<hash_type _hash>
@@ -1015,8 +1015,8 @@ template<noise::noise_context_config _config>
 noise::noise_context<_config>::buffer_prologue_type
     noise::noise_context<_config>::get_prologue() {
     buffer_prologue_type buffer_tmp{};
-    std::copy(reinterpret_cast<char *>(&prologue),
-              reinterpret_cast<char *>(&prologue) + sizeof(prologue), buffer_tmp.begin());
+    std::copy(buffer_tmp.begin(), buffer_tmp.begin() + sizeof(prologue),
+              reinterpret_cast<char *>(&prologue));
     return buffer_tmp;
 }
 template<noise::noise_context_config _config>

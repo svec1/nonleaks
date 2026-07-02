@@ -150,7 +150,7 @@ int main(int argc, char *argv[]) {
         log_main.exception_to_all(excp);
         return 1;
     } catch (const std::exception &excp) {
-        log_main.to_all("Program panic: {}.", excp.what());
+        log_main.to_all("Program panic: {}", excp.what());
         return 1;
     }
 

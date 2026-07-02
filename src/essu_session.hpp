@@ -213,17 +213,17 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
             // Will delete!
             static endpoint_config_type config_tmp = {
                 {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
-                noise::noise_role::RESPONDER,
+                noise::noise_role::INITIATOR,
                 {},
                 {}};
             add_endpoint_config_internal(config_tmp);
             register_new_session_internal(incoming_session_s, config_tmp);
         }
-        session_info_it = registered_session_s.end() - 1;
+        session_info_it = incoming_session_s.end() - 1;
         try {
             handle_session(*session_info_it);
             if (!protocol::try_handle(*session_info_it, pckt))
-                session_info_it->get_log().throw_exception("Received invalid packet.");
+                session_info_it->get_log().throw_exception<session_error>("Received invalid packet.");
         } catch (const base_error &) {
             delete_registered_session_internal(std::size_t(
                 std::distance(registered_session_s.begin(), session_info_it)));
