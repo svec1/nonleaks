@@ -320,7 +320,7 @@ public:
         void reseed();
 
     public:
-        noise_buffer_view padding_buffer;
+        noise_buffer_view padding_buffer{};
 
     private:
         NoiseRandState *randstate = nullptr;
@@ -494,7 +494,8 @@ noise::noise_context<_config>::random_state::random_state() {
         handle_error(ret, "Failed to init random state.");
 }
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::random_state::random_state(random_state &&other) {
+noise::noise_context<_config>::random_state::random_state(random_state &&other)
+    : random_state() {
     (void) this->operator=(std::move(other));
 }
 template<noise::noise_context_config _config>
@@ -542,7 +543,8 @@ noise::noise_context<_config>::cipher_state::cipher_state() {
         handle_error(ret, "Failed to init decrypt cipher state.");
 }
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::cipher_state::cipher_state(cipher_state &&other) {
+noise::noise_context<_config>::cipher_state::cipher_state(cipher_state &&other)
+    : cipher_state() {
     (void) this->operator=(std::move(other));
 }
 template<noise::noise_context_config _config>
@@ -743,7 +745,7 @@ noise::noise_context<_config>::dh_state<_dh>::dh_state() {
 }
 template<noise::noise_context_config _config>
 template<noise::dh_type _dh>
-noise::noise_context<_config>::dh_state<_dh>::dh_state(dh_state &&other) {
+noise::noise_context<_config>::dh_state<_dh>::dh_state(dh_state &&other) : dh_state() {
     (void) this->operator=(std::move(other));
 }
 template<noise::noise_context_config _config>
@@ -840,7 +842,8 @@ noise::noise_context<_config>::hash_state<_hash>::hash_state() {
 }
 template<noise::noise_context_config _config>
 template<noise::hash_type _hash>
-noise::noise_context<_config>::hash_state<_hash>::hash_state(hash_state &&other) {
+noise::noise_context<_config>::hash_state<_hash>::hash_state(hash_state &&other)
+    : hash_state() {
     (void) this->operator=(std::move(other));
 }
 template<noise::noise_context_config _config>
@@ -890,7 +893,7 @@ void noise::noise_context<_config>::hash_state<_hash>::hkdf(
 
 // Noise context
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::noise_context(noise_context &&other) {
+noise::noise_context<_config>::noise_context(noise_context &&other) : noise_context() {
     (void) this->operator=(std::move(other));
 }
 template<noise::noise_context_config _config>
@@ -940,7 +943,7 @@ template<noise::noise_context_config _config>
 void noise::noise_context<_config>::stop() {
     if (this->get_action() != noise_action::SPLIT)
         handle_error(0, "Failed to complete handshake.");
-    NoiseCipherState *encrypt_state, *decrypt_state;
+    NoiseCipherState *encrypt_state = nullptr, *decrypt_state = nullptr;
 
     std::size_t ret;
     if ((ret = noise_handshakestate_split(handshakestate, &encrypt_state, &decrypt_state))
@@ -1014,7 +1017,7 @@ void noise::noise_context<_config>::set_prologue(buffer_prologue_extention_type 
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::buffer_prologue_type
     noise::noise_context<_config>::get_prologue() {
-    buffer_prologue_type buffer_tmp{};
+    buffer_prologue_type buffer_tmp;
     std::copy(buffer_tmp.begin(), buffer_tmp.begin() + sizeof(prologue),
               reinterpret_cast<char *>(&prologue));
     return buffer_tmp;
@@ -1022,7 +1025,7 @@ noise::noise_context<_config>::buffer_prologue_type
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::buffer_key_type
     noise::noise_context<_config>::get_remote_public_key() {
-    buffer_key_type buffer_tmp{};
+    buffer_key_type buffer_tmp;
     NoiseDHState   *dh = noise_handshakestate_get_remote_public_key_dh(handshakestate);
 
     std::size_t ret;
@@ -1036,7 +1039,7 @@ noise::noise_context<_config>::buffer_key_type
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::hash_state<_config.hash>::buffer_type
     noise::noise_context<_config>::get_handshake_hash() {
-    decltype(get_handshake_hash()) buffer_hash{};
+    decltype(get_handshake_hash()) buffer_hash;
 
     std::size_t ret;
     if ((ret = noise_handshakestate_get_handshake_hash(
