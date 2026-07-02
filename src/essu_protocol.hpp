@@ -7,7 +7,7 @@
 namespace essu {
 
 // Session info corresponding to an individual node
-struct session_info_type {
+struct session_info_type : noncopyable {
     friend class protocol;
 
     enum class handshake_status_enum : std::size_t {
@@ -29,12 +29,11 @@ protected:
         reset_state();
         update_dynamic_owner();
     }
-    session_info_type(const session_info_type &) = delete;
-    session_info_type(session_info_type &&)      = delete;
+    session_info_type(session_info_type &&) = default;
 
 public:
-    decltype(auto) get_remote_endpoint() const noexcept { return remote_endpoint; }
-    decltype(auto) get_log() const noexcept { return log; }
+    decltype(auto) get_remote_endpoint() const noexcept { return (remote_endpoint); }
+    decltype(auto) get_log() const noexcept { return (log); }
     bool           payload_stream_is_available() const noexcept {
         return handshake_status == handshake_status_enum::COMPLETE && !was_sent_retry
                && !was_received_retry;
@@ -52,7 +51,7 @@ private:
         was_received_retry            = false;
 
         different_receiver_unit_number = 0;
-        predicted_skip_batch           = false;
+        skipped_batches_number         = 0;
     }
     void update_dynamic_owner() {
         log.set_dynamic_owner(
@@ -81,7 +80,7 @@ private:
     bool          was_received_retry;
 
     std::uint32_t different_receiver_unit_number;
-    bool          predicted_skip_batch;
+    std::uint32_t skipped_batches_number;
 
 private:
     static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
@@ -94,7 +93,7 @@ class protocol final {
 
 public:
     static inline void prepare(session_info_type &session_info, packet_type &pckt);
-    static inline void handle(session_info_type &session_info, packet_type &pckt);
+    static inline bool try_handle(session_info_type &session_info, packet_type &pckt);
     static inline void start_handshake(session_info_type &session_info);
     static inline void stop_handshake(session_info_type &session_info);
     static inline session_info_type::handshake_status_enum
@@ -102,13 +101,12 @@ public:
     static inline std::uint64_t
         get_handshake_number(const session_info_type &session_info) noexcept;
 
-    static inline bool determine_affiliation_packet(session_info_type &session_info,
-                                                    const packet_type &pckt);
-
     static inline noise_handshake_context::buffer_current_state_hash_type
         get_current_state_hash(session_info_type &session_info);
 
 private:
+    static inline bool determine_affiliation_packet(session_info_type &session_info,
+                                                    const packet_type &pckt);
     static inline void update_handshake_status(session_info_type &session_info) noexcept;
     static inline void check_packet_compliance(const session_info_type &session_info,
                                                const packet_type       &pckt);
@@ -135,7 +133,7 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
         // Inits packet like handshake message if necessary
         if (session_info.handshake_context.get_action()
                 == noise::noise_action::WRITE_MESSAGE
-            && std::uniform_int_distribution<std::size_t>(1, 100)(random_state.generator)
+            && std::uniform_int_distribution<std::size_t>(1, 100)(random_state)
                    >= sent_handshake_batch_factor)
             session_info.handshake_context.init_packet(pckt);
 
@@ -222,12 +220,12 @@ void essu::protocol::prepare(session_info_type &session_info, packet_type &pckt)
     }
 
     // Shuffles units in batch
-    std::shuffle(pckt->units.begin(), pckt->units.end(), random_state.generator);
+    std::shuffle(pckt->units.begin(), pckt->units.end(), random_state);
     ++session_info.batch_sent_number;
     update_handshake_status(session_info);
 }
 
-void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) {
+bool essu::protocol::try_handle(session_info_type &session_info, packet_type &pckt) {
     decltype(auto) payload_cipher_state =
         session_info.handshake_context.get_payload_cipher_state();
     decltype(auto) header_cipher_state =
@@ -237,8 +235,14 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
         (session_info.handshake_status
          == session_info_type::handshake_status_enum::COMPLETE);
 
-    if (session_info.predicted_skip_batch) {
-        session_info.predicted_skip_batch = false;
+    if (!determine_affiliation_packet(session_info, pckt))
+        return false;
+
+    if (session_info.skipped_batches_number) {
+        if (session_info.skipped_batches_number > skip_batch_window_number)
+            session_info.log.throw_exception<protocol_error>(
+                "Window of skip batch has been reached.");
+
         set_dummy_packet(pckt);
     } else {
         session_info.receiver_unit_number += session_info.different_receiver_unit_number;
@@ -341,10 +345,11 @@ void essu::protocol::handle(session_info_type &session_info, packet_type &pckt) 
                 session_info.remote_endpoint = packet_endpoint;
             session_info.update_dynamic_owner();
         }
+        ++session_info.batch_received_number;
+        update_handshake_status(session_info);
     }
 
-    ++session_info.batch_received_number;
-    update_handshake_status(session_info);
+    return true;
 }
 void essu::protocol::start_handshake(session_info_type &session_info) {
     if (session_info.handshake_number == max_available_handshake_number)
@@ -407,6 +412,7 @@ bool essu::protocol::determine_affiliation_packet(session_info_type &session_inf
     }
 
     if (count_suitable_units > 0) {
+        session_info.skipped_batches_number = 0;
         session_info.different_receiver_unit_number =
             ((possible_unit_number - batch_units_number + 1)
              - session_info.receiver_unit_number);
@@ -419,10 +425,9 @@ bool essu::protocol::determine_affiliation_packet(session_info_type &session_inf
         header_cipher_state.get_encrypt_counter_block()
         - (possible_unit_number - session_info.receiver_unit_number));
 
-    if (session_info.remote_endpoint == pckt.get_endpoint()
-        && session_info.handshake_number
-        && session_info.batch_received_number < skip_batch_window_number) {
-        session_info.predicted_skip_batch = true;
+    if (session_info.remote_endpoint.address == pckt.get_endpoint().address
+        && session_info.handshake_number && !session_info.batch_received_number) {
+        ++session_info.skipped_batches_number;
         return true;
     }
     return false;

@@ -233,7 +233,7 @@ struct noise_context_config {
 };
 
 template<noise::noise_context_config _config>
-class noise_context {
+class noise_context : noncopyable {
 public:
     static constexpr noise::noise_context_config config = _config;
     static constexpr NoiseProtocolId             nid_static{
@@ -293,66 +293,50 @@ public:
         NoiseBuffer buffer{};
     };
 
-    struct random_state {
-        struct uniform_random_generator {
-            using result_type = std::size_t;
+    struct random_state : noncopyable {
+        using result_type = std::size_t;
 
-        public:
-            uniform_random_generator(random_state &_random_st) : random_st(_random_st) {}
+        result_type operator()() {
+            result_type value;
+            padding_buffer.set({reinterpret_cast<noheap::rbyte *>(&value), sizeof(value)},
+                               0);
+            pad();
+            reseed();
+            return value;
+        }
 
-            result_type operator()() {
-                result_type value;
-                random_st.padding_buffer.set(
-                    {reinterpret_cast<noheap::rbyte *>(&value), sizeof(value)}, 0);
-                random_st.pad();
-                random_st.reseed();
-                return value;
-            }
-
-            static constexpr std::size_t min() { return 0; }
-            static constexpr std::size_t max() { return result_type(-1); }
-
-        private:
-            random_state &random_st;
-        };
+        static constexpr std::size_t min() { return 0; }
+        static constexpr std::size_t max() { return result_type(-1); }
 
     public:
         random_state();
-
-        random_state(random_state &&)                 = delete;
-        random_state(const random_state &)            = delete;
-        random_state &operator=(const random_state &) = delete;
-
+        random_state(random_state &&other);
         ~random_state();
+
+        random_state &operator=(random_state &&other);
 
     public:
         void pad();
         void reseed();
 
     public:
-        noise_buffer_view        padding_buffer;
-        uniform_random_generator generator;
+        noise_buffer_view padding_buffer;
 
     private:
         NoiseRandState *randstate = nullptr;
     };
 
-    struct cipher_state {
-        friend class noise::noise_context<_config>;
+    struct cipher_state : noncopyable {
+        friend class noise_context;
 
     public:
         cipher_state();
-
-        cipher_state(cipher_state &&)                 = delete;
-        cipher_state(const cipher_state &)            = delete;
-        cipher_state &operator=(const cipher_state &) = delete;
-
+        cipher_state(cipher_state &&other);
         ~cipher_state();
 
-    public:
-        void init(cipher_state &&other);
-        void dump();
+        cipher_state &operator=(cipher_state &&other);
 
+    public:
         void encrypt(std::span<const noheap::rbyte> buffer_ad);
         void decrypt(std::span<const noheap::rbyte> buffer_ad);
         void rekey_encrypt();
@@ -376,6 +360,7 @@ public:
     private:
         void set_states(NoiseCipherState *_encrypt_state,
                         NoiseCipherState *_decrypt_state);
+        void dump();
 
         void check_encrypt_key() const;
         void check_decrypt_key() const;
@@ -390,7 +375,7 @@ public:
     };
 
     template<dh_type _dh>
-    struct dh_state {
+    struct dh_state : noncopyable {
         static constexpr dh_type dh = _dh;
 
         using buffer_private_key_type = buffer_type<get_private_key_size<dh>()>;
@@ -400,12 +385,10 @@ public:
 
     public:
         dh_state();
-
-        dh_state(dh_state &&handle)           = delete;
-        dh_state(const dh_state &)            = delete;
-        dh_state &operator=(const dh_state &) = delete;
-
+        dh_state(dh_state &&other);
         ~dh_state();
+
+        dh_state &operator=(dh_state &&other);
 
     public:
         void generate_keypair();
@@ -424,19 +407,17 @@ public:
     };
 
     template<hash_type _hash>
-    struct hash_state {
+    struct hash_state : noncopyable {
         static constexpr hash_type hash = _hash;
 
         using buffer_type = buffer_type<get_hash_size<hash>()>;
 
     public:
         hash_state();
-
-        hash_state(hash_state &&handle)           = delete;
-        hash_state(const hash_state &)            = delete;
-        hash_state &operator=(const hash_state &) = delete;
-
+        hash_state(hash_state &&other);
         ~hash_state();
+
+        hash_state &operator=(hash_state &&other);
 
     public:
         buffer_type get_hash(std::span<const noheap::rbyte> buffer) const;
@@ -452,12 +433,10 @@ public:
 
 public:
     noise_context() = default;
-
-    noise_context(noise_context &&)                 = delete;
-    noise_context(const noise_context &)            = delete;
-    noise_context &operator=(const noise_context &) = delete;
-
+    noise_context(noise_context &&other);
     ~noise_context();
+
+    noise_context &operator=(noise_context &&other);
 
 public:
     void init(noise_role _role);
@@ -466,12 +445,12 @@ public:
     void start();
     void stop();
 
-    noise_buffer_view &get_handshake_buffer();
-    noise_buffer_view &get_handshake_payload_buffer();
-    void               get_cipher_state(cipher_state &_cipher_state);
+    noise_buffer_view                           &get_handshake_buffer() noexcept;
+    noise_buffer_view                           &get_handshake_payload_buffer() noexcept;
+    noise::noise_context<_config>::cipher_state &get_cipher_state() noexcept;
 
-    noise_action get_action() const;
-    noise_role   get_role() const;
+    noise_action get_action() const noexcept;
+    noise_role   get_role() const noexcept;
 
     void set_handshake_message();
     void get_handshake_message();
@@ -509,14 +488,25 @@ private:
 
 // Random state
 template<noise::noise_context_config _config>
-noise::noise_context<_config>::random_state::random_state() : generator(*this) {
+noise::noise_context<_config>::random_state::random_state() {
     std::size_t ret;
     if ((ret = noise_randstate_new(&randstate)) != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to init random state.");
 }
 template<noise::noise_context_config _config>
+noise::noise_context<_config>::random_state::random_state(random_state &&other) {
+    (void) this->operator=(std::move(other));
+}
+template<noise::noise_context_config _config>
 noise::noise_context<_config>::random_state::~random_state() {
     noise_randstate_free(randstate);
+}
+template<noise::noise_context_config _config>
+noise::noise_context<_config>::random_state &
+    noise::noise_context<_config>::random_state::operator=(random_state &&other) {
+    std::swap(randstate, other.randstate);
+    std::swap(padding_buffer, other.padding_buffer);
+    return *this;
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::random_state::pad() {
@@ -552,37 +542,28 @@ noise::noise_context<_config>::cipher_state::cipher_state() {
         handle_error(ret, "Failed to init decrypt cipher state.");
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::cipher_state::init(cipher_state &&other) {
-    dump();
-
-    encrypt_state = other.encrypt_state;
-    decrypt_state = other.decrypt_state;
-
-    other.encrypt_state = other.decrypt_state = nullptr;
-}
-template<noise::noise_context_config _config>
-void noise::noise_context<_config>::cipher_state::dump() {
-    if (encrypt_state == nullptr)
-        return;
-
-    std::size_t ret;
-    if ((ret = noise_cipherstate_free(encrypt_state)) != NOISE_ERROR_NONE)
-        handle_error(ret, "Failed to free encrypt cipher state.");
-    if ((ret = noise_cipherstate_free(decrypt_state)) != NOISE_ERROR_NONE)
-        handle_error(ret, "Failed to free decrypt cipher state.");
-
-    encrypt_state = decrypt_state = nullptr;
+noise::noise_context<_config>::cipher_state::cipher_state(cipher_state &&other) {
+    (void) this->operator=(std::move(other));
 }
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::cipher_state::~cipher_state() {
     dump();
 }
 template<noise::noise_context_config _config>
+noise::noise_context<_config>::cipher_state &
+    noise::noise_context<_config>::cipher_state::operator=(cipher_state &&other) {
+    std::swap(encrypt_buffer, other.encrypt_buffer);
+    std::swap(decrypt_buffer, other.decrypt_buffer);
+    std::swap(encrypt_state, other.encrypt_state);
+    std::swap(decrypt_state, other.decrypt_state);
+    return *this;
+}
+template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::encrypt(
     std::span<const noheap::rbyte> buffer_ad) {
     check_encrypt_key();
-    std::size_t ret;
 
+    std::size_t ret;
     if ((ret = noise_cipherstate_encrypt_with_ad(
              encrypt_state, reinterpret_cast<const noheap::ubyte *>(buffer_ad.data()),
              buffer_ad.size(), &encrypt_buffer.get()))
@@ -593,6 +574,7 @@ template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::decrypt(
     std::span<const noheap::rbyte> buffer_ad) {
     check_decrypt_key();
+
     std::size_t ret;
     if ((ret = noise_cipherstate_decrypt_with_ad(
              decrypt_state, reinterpret_cast<const noheap::ubyte *>(buffer_ad.data()),
@@ -603,6 +585,7 @@ void noise::noise_context<_config>::cipher_state::decrypt(
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::rekey_encrypt() {
     check_encrypt_key();
+
     std::size_t ret;
     if ((ret = noise_cipherstate_rekey(encrypt_state)) != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to rekey for encrypt state.");
@@ -618,6 +601,7 @@ template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_encrypt_nonce(
     const buffer_nonce_type &nonce) {
     check_encrypt_key();
+
     std::size_t ret;
     if ((ret = noise_cipherstate_set_nonce(
              encrypt_state, reinterpret_cast<const noheap::ubyte *>(nonce.data()),
@@ -629,6 +613,7 @@ template<noise::noise_context_config _config>
 void noise::noise_context<_config>::cipher_state::set_decrypt_nonce(
     const buffer_nonce_type &nonce) {
     check_decrypt_key();
+
     std::size_t ret;
     if ((ret = noise_cipherstate_set_nonce(
              decrypt_state, reinterpret_cast<const noheap::ubyte *>(nonce.data()),
@@ -736,6 +721,16 @@ void noise::noise_context<_config>::cipher_state::set_states(
     encrypt_state = _encrypt_state;
     decrypt_state = _decrypt_state;
 }
+template<noise::noise_context_config _config>
+void noise::noise_context<_config>::cipher_state::dump() {
+    std::size_t ret;
+    if ((ret = noise_cipherstate_free(encrypt_state)) != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to free encrypt cipher state.");
+    if ((ret = noise_cipherstate_free(decrypt_state)) != NOISE_ERROR_NONE)
+        handle_error(ret, "Failed to free decrypt cipher state.");
+
+    encrypt_state = decrypt_state = nullptr;
+}
 
 // DH state
 template<noise::noise_context_config _config>
@@ -748,10 +743,22 @@ noise::noise_context<_config>::dh_state<_dh>::dh_state() {
 }
 template<noise::noise_context_config _config>
 template<noise::dh_type _dh>
+noise::noise_context<_config>::dh_state<_dh>::dh_state(dh_state &&other) {
+    (void) this->operator=(std::move(other));
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
 noise::noise_context<_config>::dh_state<_dh>::~dh_state() {
     std::size_t ret;
     if ((ret = noise_dhstate_free(dhstate)) != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to free dh state.");
+}
+template<noise::noise_context_config _config>
+template<noise::dh_type _dh>
+noise::noise_context<_config>::dh_state<_dh> &
+    noise::noise_context<_config>::dh_state<_dh>::operator=(dh_state &&other) {
+    std::swap(dhstate, other.dhstate);
+    return *this;
 }
 template<noise::noise_context_config _config>
 template<noise::dh_type _dh>
@@ -833,10 +840,22 @@ noise::noise_context<_config>::hash_state<_hash>::hash_state() {
 }
 template<noise::noise_context_config _config>
 template<noise::hash_type _hash>
+noise::noise_context<_config>::hash_state<_hash>::hash_state(hash_state &&other) {
+    (void) this->operator=(std::move(other));
+}
+template<noise::noise_context_config _config>
+template<noise::hash_type _hash>
 noise::noise_context<_config>::hash_state<_hash>::~hash_state() {
     std::size_t ret;
     if ((ret = noise_hashstate_free(hashstate)) != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to free hash state.");
+}
+template<noise::noise_context_config _config>
+template<noise::hash_type _hash>
+noise::noise_context<_config>::hash_state<_hash> &
+    noise::noise_context<_config>::hash_state<_hash>::operator=(hash_state &&other) {
+    std::swap(hashstate, other.hashstate);
+    return *this;
 }
 template<noise::noise_context_config _config>
 template<noise::hash_type _hash>
@@ -871,15 +890,25 @@ void noise::noise_context<_config>::hash_state<_hash>::hkdf(
 
 // Noise context
 template<noise::noise_context_config _config>
+noise::noise_context<_config>::noise_context(noise_context &&other) {
+    (void) this->operator=(std::move(other));
+}
+template<noise::noise_context_config _config>
+noise::noise_context<_config> &
+    noise::noise_context<_config>::operator=(noise_context &&other) {
+    std::swap(handshakestate, other.handshakestate);
+    std::swap(cipher_st, other.cipher_st);
+    std::swap(handshake_buffer, other.handshake_buffer);
+    std::swap(handshake_payload_buffer, other.handshake_payload_buffer);
+    return *this;
+}
+template<noise::noise_context_config _config>
 noise::noise_context<_config>::~noise_context<_config>() {
     this->dump();
 }
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::init(noise_role role) {
     std::size_t ret;
-    this->dump();
-    cipher_st.dump();
-
     if ((ret = noise_handshakestate_new_by_id(&handshakestate, &nid_static,
                                               static_cast<std::uint16_t>(role)))
         != NOISE_ERROR_NONE)
@@ -891,6 +920,7 @@ void noise::noise_context<_config>::dump() {
         noise_handshakestate_free(handshakestate);
 
     handshakestate           = nullptr;
+    cipher_st                = {};
     handshake_buffer         = {};
     handshake_payload_buffer = {};
 }
@@ -910,34 +940,37 @@ template<noise::noise_context_config _config>
 void noise::noise_context<_config>::stop() {
     if (this->get_action() != noise_action::SPLIT)
         handle_error(0, "Failed to complete handshake.");
+    NoiseCipherState *encrypt_state, *decrypt_state;
 
     std::size_t ret;
-    if ((ret = noise_handshakestate_split(handshakestate, &cipher_st.encrypt_state,
-                                          &cipher_st.decrypt_state))
+    if ((ret = noise_handshakestate_split(handshakestate, &encrypt_state, &decrypt_state))
         != NOISE_ERROR_NONE)
         handle_error(ret, "Failed to split handshake.");
+
+    cipher_st.set_states(encrypt_state, decrypt_state);
 }
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::noise_buffer_view &
-    noise::noise_context<_config>::get_handshake_buffer() {
+    noise::noise_context<_config>::get_handshake_buffer() noexcept {
     return handshake_buffer;
 }
 template<noise::noise_context_config _config>
 noise::noise_context<_config>::noise_buffer_view &
-    noise::noise_context<_config>::get_handshake_payload_buffer() {
+    noise::noise_context<_config>::get_handshake_payload_buffer() noexcept {
     return handshake_payload_buffer;
 }
 template<noise::noise_context_config _config>
-void noise::noise_context<_config>::get_cipher_state(cipher_state &_cipher_st) {
-    _cipher_st.init(std::move(cipher_st));
+noise::noise_context<_config>::cipher_state &
+    noise::noise_context<_config>::get_cipher_state() noexcept {
+    return cipher_st;
 }
 
 template<noise::noise_context_config _config>
-noise::noise_action noise::noise_context<_config>::get_action() const {
+noise::noise_action noise::noise_context<_config>::get_action() const noexcept {
     return noise_action(noise_handshakestate_get_action(handshakestate));
 }
 template<noise::noise_context_config _config>
-noise::noise_role noise::noise_context<_config>::get_role() const {
+noise::noise_role noise::noise_context<_config>::get_role() const noexcept {
     return noise_role(noise_handshakestate_get_role(handshakestate));
 }
 
@@ -970,7 +1003,7 @@ void noise::noise_context<_config>::get_handshake_message() {
 
 template<noise::noise_context_config _config>
 void noise::noise_context<_config>::set_prologue(buffer_prologue_extention_type ext) {
-    prologue.ext = std::move(ext);
+    prologue.ext = ext;
 
     std::size_t ret;
     if ((ret = noise_handshakestate_set_prologue(

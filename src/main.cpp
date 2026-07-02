@@ -58,25 +58,21 @@ static void parse_options(xxcore_config &cfg, int argc, char *argv[]) {
         std::string_view option = argv[i];
         std::string_view current_value;
 
-        try {
-            switch (option[1]) {
-                case 'h': {
-                    throw re(usage_string);
-                }
-                case 'd': {
-                    current_value = get_argument(argc, argv, i);
-                    cfg.device    = current_value;
-                    break;
-                }
-                case 'k': {
-                    cfg.new_keypair = true;
-                    break;
-                }
-                default:
-                    throw_usage(option[1]);
+        switch (option[1]) {
+            case 'h': {
+                throw re(usage_string);
             }
-        } catch (system::system_error &) {
-            throw_usage(current_value, -1);
+            case 'd': {
+                current_value = get_argument(argc, argv, i);
+                cfg.device    = current_value;
+                break;
+            }
+            case 'k': {
+                cfg.new_keypair = true;
+                break;
+            }
+            default:
+                throw_usage(option[1]);
         }
     }
 }
@@ -123,7 +119,9 @@ void print_cfg(const xxcore_config &cfg) {
     log_main.to_console("    | Max session number: {}", essu::max_session_number);
     log_main.to_console("    | Noise pattern: {}",
                         std::string_view(nc_type::get_name_id()));
-    log_main.to_console("    | MLDSA type: {}", mldsa_native::mldsa_native_wrapper<noheap::buffer_bytes_type<1>{}>::type);
+    log_main.to_console(
+        "    | MLDSA type: {}",
+        mldsa_native::mldsa_native_wrapper<noheap::buffer_bytes_type<1>{}>::type);
 }
 
 int main(int argc, char *argv[]) {

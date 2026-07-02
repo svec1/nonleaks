@@ -2,6 +2,7 @@
 #define NET_HPP
 
 #include <boost/asio.hpp>
+#include <shared_mutex>
 
 #include "utils.hpp"
 
@@ -135,20 +136,19 @@ public:
     using socket_type       = basic_socket_type::socket;
     using action_type       = Action;
     using endpoint_type     = basic_socket_type::endpoint;
+    using packet_type       = action_type::packet_type;
 
 public:
-    template<typename... Args>
-    udp_stream(asio::io_context &io, asio::ip::port_type _port, Args &&...args);
+    udp_stream(Action &_act, asio::io_context &io, asio::ip::port_type _port);
     udp_stream(udp_stream &&)      = delete;
     udp_stream(const udp_stream &) = delete;
 
     ~udp_stream();
 
 public:
-    inline auto          &get_action();
     inline decltype(auto) get_executor();
     inline decltype(auto) get_port() const;
-    inline decltype(auto) get_running() const;
+    inline decltype(auto) is_running() const;
     void                  open(ipv v);
     inline void           close();
 
@@ -164,24 +164,22 @@ private:
     static constexpr log_handler log{buffer_owner};
 
 private:
-    mutable std::mutex m;
-    Action             act;
-    socket_type        socket_v4;
-    socket_type        socket_v6;
+    mutable std::shared_mutex m;
+    Action                   &act;
+    socket_type               socket_v4;
+    socket_type               socket_v6;
 
     port_type port;
     bool      running;
     ipv       v;
 
-    typename action_type::packet_type receive_pckt_v4, receive_pckt_v6;
-    endpoint_type                     receive_endpoint_v4, receive_endpoint_v6;
+    packet_type   receive_packet_v4, receive_packet_v6;
+    endpoint_type receive_endpoint_v4, receive_endpoint_v6;
 };
 
 template<Derived_from_action Action>
-template<typename... Args>
-udp_stream<Action>::udp_stream(asio::io_context &io, port_type _port, Args &&...args)
-    : act(std::forward<Args>(args)...), socket_v4(io), socket_v6(io), port(_port),
-      running(false) {
+udp_stream<Action>::udp_stream(Action &_act, asio::io_context &io, port_type _port)
+    : act(_act), socket_v4(io), socket_v6(io), port(_port), running(false) {
 }
 template<Derived_from_action Action>
 udp_stream<Action>::~udp_stream() {
@@ -190,23 +188,18 @@ udp_stream<Action>::~udp_stream() {
 }
 
 template<Derived_from_action Action>
-auto &udp_stream<Action>::get_action() {
-    std::lock_guard<std::mutex> m_lock(m);
-    return act;
-}
-template<Derived_from_action Action>
 decltype(auto) udp_stream<Action>::get_executor() {
-    std::lock_guard<std::mutex> m_lock(m);
+    std::shared_lock<decltype(m)> m_lock(m);
     return socket_v4.get_executor();
 }
 template<Derived_from_action Action>
 decltype(auto) udp_stream<Action>::get_port() const {
-    std::lock_guard<std::mutex> m_lock(m);
+    std::shared_lock<decltype(m)> m_lock(m);
     return port;
 }
 template<Derived_from_action Action>
-decltype(auto) udp_stream<Action>::get_running() const {
-    std::lock_guard<std::mutex> m_lock(m);
+decltype(auto) udp_stream<Action>::is_running() const {
+    std::shared_lock<decltype(m)> m_lock(m);
     return running;
 }
 template<Derived_from_action Action>
@@ -227,7 +220,7 @@ void udp_stream<Action>::open(ipv _v) {
             handle_error(ec);
         };
 
-        std::lock_guard<std::mutex> m_lock(m);
+        std::unique_lock<decltype(m)> m_lock(m);
         if (running)
             log.throw_exception<network_error>("Failed to open udp stream.");
 
@@ -248,7 +241,7 @@ void udp_stream<Action>::open(ipv _v) {
 }
 template<Derived_from_action Action>
 void udp_stream<Action>::close() {
-    std::lock_guard<std::mutex> m_lock(m);
+    std::unique_lock<decltype(m)> m_lock(m);
     if (!running)
         log.throw_exception<network_error>("Failed to close udp stream.");
 
@@ -265,26 +258,23 @@ void udp_stream<Action>::close() {
 
 template<Derived_from_action Action>
 void udp_stream<Action>::register_async_send() {
-    std::lock_guard<std::mutex> m_lock(m);
-    if (!running || !act.is_valid())
+    if (!is_running() || !act.is_valid())
         return;
 
     asio::post(socket_v4.get_executor(), [this] {
         try {
             // Performs init a packet base on TWrapper_packet protocol
-            // NOTE: init_packet can wait
-            typename action_type::packet_type pckt{};
+            typename action_type::packet_type pckt;
             this->act.init_packet(pckt);
 
             // Sends the packet
             if (pckt.get_endpoint().address != buffer_address_type{}) {
-                std::lock_guard<std::mutex> m_lock(this->m);
-                system::error_code          ec;
-                auto                        native_remote_endpoint = pckt.get_endpoint();
-                asio::const_buffer          buffer{pckt.data(), pckt.size()};
-                endpoint_type               remote_endpoint{
+                system::error_code ec;
+                auto               native_remote_endpoint = pckt.get_endpoint();
+                asio::const_buffer buffer{pckt.data(), pckt.size()};
+                endpoint_type      remote_endpoint{
                     utils::get_address_object(native_remote_endpoint.address,
-                                                            native_remote_endpoint.v),
+                                                   native_remote_endpoint.v),
                     native_remote_endpoint.port};
 
                 if (native_remote_endpoint.v == ipv::v4)
@@ -304,8 +294,7 @@ void udp_stream<Action>::register_async_send() {
 }
 template<Derived_from_action Action>
 void udp_stream<Action>::register_async_receive(ipv v) {
-    std::lock_guard<std::mutex> m_lock(m);
-    if (!running || !act.is_valid())
+    if (!is_running() || !act.is_valid())
         return;
 
     const auto handler = [this, v](system::error_code ec, std::size_t) {
@@ -316,20 +305,14 @@ void udp_stream<Action>::register_async_receive(ipv v) {
             handle_error(ec);
 
             decltype(auto) pckt =
-                v == ipv::v4 ? this->receive_pckt_v4 : this->receive_pckt_v6;
+                v == ipv::v4 ? this->receive_packet_v4 : this->receive_packet_v6;
             decltype(auto) receive_endpoint =
                 v == ipv::v4 ? this->receive_endpoint_v4 : this->receive_endpoint_v6;
 
             // Handles the packet TWrapper_packet protocol
-            {
-                std::lock_guard<std::mutex> m_lock(this->m);
-                pckt.set_endpoint({v,
-                                   utils::get_address_bytes(receive_endpoint.address()),
-                                   receive_endpoint.port()});
-                this->act.handle_packet(std::move(pckt));
-                pckt = {};
-            }
-
+            pckt.set_endpoint({v, utils::get_address_bytes(receive_endpoint.address()),
+                               receive_endpoint.port()});
+            this->act.handle_packet(std::move(pckt));
             this->register_async_receive(v);
         } catch (const noheap::runtime_error &excp) {
             this->act.set_error(excp);
@@ -339,8 +322,10 @@ void udp_stream<Action>::register_async_receive(ipv v) {
 
     // Waits for a new packet
     decltype(auto) socket = v == ipv::v4 ? this->socket_v4 : this->socket_v6;
+    decltype(auto) receive_packet =
+        v == ipv::v4 ? this->receive_packet_v4 : this->receive_packet_v6;
     socket.async_receive_from(
-        asio::mutable_buffer{receive_pckt_v4.data(), receive_pckt_v4.size()},
+        asio::mutable_buffer{receive_packet.data(), receive_packet.size()},
         receive_endpoint_v4, 0, handler);
 }
 

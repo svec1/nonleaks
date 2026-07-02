@@ -59,8 +59,6 @@ class xxcore_service {
 public:
     static constexpr std::size_t workers_number = essu::max_session_number + 2;
 
-    using udp_stream = network::udp_stream<essu::session_handler>;
-
 public:
     inline xxcore_service(config_type &config);
     inline void run();
@@ -87,16 +85,16 @@ void xxcore_service::run() {
         worker = typename std::decay_t<decltype(worker)>{[this] { this->io.run(); }};
 
     {
-        udp_stream  stream(io, config.listen_port, config.local_config);
-        scope_guard session_stop([&] {
-            io.stop();
+        essu::session_handler                      action(config.local_config);
+        network::udp_stream<essu::session_handler> stream(action, io, config.listen_port);
+        scope_guard                                session_stop([&] {
             stream.close();
+            io.stop();
         });
 
-        decltype(auto) act = stream.get_action();
         for (auto &endpoint_config_pair : config.endpoint_config_s) {
-            act.add_endpoint_config(endpoint_config_pair.second);
-            act.add_session(endpoint_config_pair.second);
+            action.add_endpoint_config(endpoint_config_pair.second);
+            action.register_new_session(endpoint_config_pair.second);
         }
 
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
@@ -105,31 +103,26 @@ void xxcore_service::run() {
 
         // For testing: will be deleted
         {
-            while (act.is_valid()) {
+			while (action.is_valid()) {
                 try {
-                    decltype(auto) session_list = act.get_session_list();
-                    for (decltype(auto) it = session_list.begin();
-                         it < session_list.end(); ++it) {
-                        decltype(auto) session_info = *it;
-
+                    while (action.exist_received_packets())
+                        (void) action.pop_packet();
+					for (std::size_t it = 0; it < action.get_registered_session_s_size();
+                         ++it) {
                         essu::packet_type pckt;
                         essu::set_dummy_packet(pckt);
-                        act.push_packet({pckt, session_info});
+                        action.push_packet({pckt, it});
                     }
-                    while (act.exist_received_packets())
-                        act.pop_packet();
+                    for (std::size_t it = 0; it < action.get_incoming_session_s_size();
+                         ++it)
+                        action.register_incoming_session(it);
 
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 } catch (essu::base_error &excp) {
-                    if (excp.has_session_info()) {
-                        decltype(auto) session_info = excp.get_session_info().get();
-                        session_info.get_log().get_log_handler().to_all("{}",
-                                                                        excp.what());
-                        act.delete_session(session_info);
-                    }
+                    log.to_all("{}", excp.what());
                 }
             }
-            throw act.get_error();
+            throw action.get_error();
         }
 
         log.to_all("Stop.");

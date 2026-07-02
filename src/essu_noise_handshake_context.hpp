@@ -36,6 +36,7 @@ public:
         const noise_context_type::buffer_key_type &_remote_public_key,
         const noise::buffer_pre_shared_key_type   &_pre_shared_key,
         const noise_context_type::keypair_type    &_local_keypair);
+    inline noise_handshake_context(noise_handshake_context &&) = default;
 
 public:
     inline void init_packet(packet_type &pckt);
@@ -287,9 +288,6 @@ void essu::noise_handshake_context::start() {
     handshake_payload           = {};
     handshake_hash              = {};
     available_batch_number      = 0;
-    header_cipher_state_sender.init({});
-    header_cipher_state_receiver.init({});
-    payload_cipher_state.init({});
     random_state.reseed();
 
     generate_pair_ephemeral_obfs_key();
@@ -315,8 +313,8 @@ void essu::noise_handshake_context::stop() {
     }
 
     noise_context.stop();
-    noise_context.get_cipher_state(payload_cipher_state);
-    handshake_hash = noise_context.get_handshake_hash();
+    payload_cipher_state = std::move(noise_context.get_cipher_state());
+    handshake_hash       = noise_context.get_handshake_hash();
     generate_posthandshake_unique_values();
 
     noise_context.dump();
@@ -397,6 +395,8 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
         noheap::clip_buffer<sizeof(std::uint64_t),
                             noheap::buffer_size<noise_context_type::buffer_key_type> * 2>(
             keystream));
+
+    payload_cipher_state = {};
 }
 
 // Generates posthandshake header obfuscation key + unique value

@@ -8,7 +8,6 @@
 namespace essu {
 
 constexpr std::size_t timeout_ms                 = 7500;
-constexpr std::size_t keep_alive_ms              = 2500;
 constexpr std::size_t packet_size                = 1376;
 constexpr std::size_t header_data_size           = 17;
 constexpr std::size_t min_random_bytes_number    = 32;
@@ -35,7 +34,7 @@ static constexpr noise::noise_context_config<
 using noise_context_type = noise::noise_context<noise_config>;
 
 // Transport unit
-struct unit_type {
+struct [[gnu::packed]] unit_type {
 public:
     enum class unit_type_enum : std::uint8_t {
         session_request = 0,
@@ -67,17 +66,18 @@ public:
 };
 
 // Packet(Batch)
-struct extention_payload_data_type {
+struct [[gnu::packed]] extention_payload_data_type {
     noheap::buffer_type<unit_type, batch_units_number> units;
 };
+
+static_assert(sizeof(extention_payload_data_type) == packet_size, "Invalid packet size.");
+
 struct noise_handshake_context;
 struct session_info_type;
 struct session_info_type_extended;
 class protocol;
 class session_handler;
 using packet_type = network::packet_native_type<extention_payload_data_type>;
-using session_info_proxy_type =
-    std::optional<std::reference_wrapper<session_info_type_extended>>;
 
 template<typename T>
 concept Packet_type = std::same_as<std::decay_t<T>, packet_type>;
@@ -85,22 +85,6 @@ concept Packet_type = std::same_as<std::decay_t<T>, packet_type>;
 class base_error : public noheap::runtime_error {
 protected:
     using runtime_error::runtime_error;
-
-public:
-    void set_session_info(session_info_proxy_type _session_info) {
-        session_info = _session_info;
-    }
-    decltype(auto) get_session_info() const {
-        if (!session_info.has_value())
-            throw noheap::logic_error("Failed to get session info.");
-
-        return session_info.value();
-    }
-
-    bool has_session_info() const noexcept { return session_info.has_value(); }
-
-private:
-    session_info_proxy_type session_info = std::nullopt;
 };
 class protocol_error : public base_error {
 public:
@@ -109,7 +93,7 @@ public:
 class session_error : public base_error {
 public:
     using base_error::base_error;
-};
+}; 
 
 namespace utils {
     inline auto get_string_unit_type(unit_type::unit_type_enum unit_type) noexcept {
@@ -147,9 +131,6 @@ inline bool is_control_session_unit_type(unit_type::unit_type_enum type) noexcep
     return type == unit_type::unit_type_enum::session_request
            || type == unit_type::unit_type_enum::session_created
            || type == unit_type::unit_type_enum::session_confirmed;
-}
-inline bool is_control_payload_packet_type(const packet_type &pckt) noexcept {
-    return get_control_unit(pckt).header.type == unit_type::unit_type_enum::data;
 }
 inline bool is_control_session_packet_type(const packet_type &pckt) noexcept {
     return is_control_session_unit_type(get_control_unit(pckt).header.type);

@@ -24,6 +24,16 @@ inline std::size_t get_now_ms() {
         .count();
 }
 
+class noncopyable {
+public:
+    noncopyable()                               = default;
+    ~noncopyable()                              = default;
+    noncopyable(noncopyable &&)                 = default;
+    noncopyable &operator=(noncopyable &&)      = default;
+    noncopyable(const noncopyable &)            = delete;
+    noncopyable &operator=(const noncopyable &) = delete;
+};
+
 namespace noheap {
 using ssize_t = std::make_signed_t<std::size_t>;
 
@@ -825,7 +835,7 @@ public:
     template<noheap::Derived_from_error TExcp = noheap::runtime_error, typename... Args>
     [[noreturn]] void throw_exception(std::format_string<Args...> format,
                                       Args &&...args) const {
-        throw TExcp(this->buffer_owner, format, std::forward<Args>(args)...);
+		throw TExcp(this->buffer_owner, format, std::forward<Args>(args)...);
     }
 
     template<output_type async = output_type::flush, noheap::Derived_from_error TExcp>
@@ -881,6 +891,8 @@ public:
     constexpr log_proxy(const log_handler                        &_log,
                         noheap::log_impl::owner_impl::buffer_type _dynamic_owner)
         : log(_log), dynamic_owner(_dynamic_owner) {}
+    constexpr log_proxy(log_proxy &&other)
+        : log(other.log), dynamic_owner(other.dynamic_owner) {}
 
 public:
     void set_dynamic_owner(noheap::log_impl::owner_impl::buffer_type _dynamic_owner) {
