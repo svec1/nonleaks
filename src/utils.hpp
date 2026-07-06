@@ -765,7 +765,7 @@ template<std::size_t size>
 struct std::formatter<noheap::buffer_chars_type<size>> {
 public:
     constexpr auto parse(std::format_parse_context &ctx) { return ctx.begin(); }
-    auto format(const noheap::buffer_chars_type<size> &s, std::format_context &ctx) const {
+    auto format(auto &&s, std::format_context &ctx) const {
         return std::format_to(ctx.out(), "{}", s.data());
     }
 };

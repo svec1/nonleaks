@@ -232,6 +232,7 @@ bool essu::protocol::try_handle(session_info_type &session_info, packet_type &pc
         set_dummy_packet(pckt);
         ++session_info.batch_received_skipped_number;
     } else {
+        session_info.batch_received_skipped_number = 0;
         session_info.receiver_unit_number += different_receiver_unit_number;
         if (session_handshake_complete)
             payload_cipher_state.set_decrypt_counter_block(
@@ -385,7 +386,7 @@ bool essu::protocol::determine_affiliation_packet(
     if (count_suitable_units > 0) {
         different_receiver_unit_number = ((possible_unit_number - batch_units_number + 1)
                                           - session_info.receiver_unit_number);
-        // Restores nonce of header_cioher_state
+		// Restores nonce of header_cioher_state
         header_cipher_state.set_encrypt_counter_block(
             header_cipher_state.get_encrypt_counter_block() - batch_units_number);
         return true;

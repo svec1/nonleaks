@@ -24,8 +24,8 @@ public:
 public:
     decltype(auto) get_remote_endpoint_address() const {
         decltype(auto) remote_endpoint = this->get_remote_endpoint();
-        return network::utils::bytes_address_to_string(
-            remote_endpoint.address, remote_endpoint.v);
+        return network::utils::bytes_address_to_string(remote_endpoint.address,
+                                                       remote_endpoint.v);
     }
 
 private:
@@ -201,38 +201,41 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
                 break;
             }
         }
-
-        // Registers new session if session is not found
-        if (session_info_it == registered_session_s.end()) {
-            buffer_endpoint_config_s_type::iterator config_it = std::find_if(
-                buffer_endpoint_config_s.begin(), buffer_endpoint_config_s.end(),
-                [&remote_endpoint](const auto &config) {
-                    return config.get().endpoint.address == remote_endpoint.address;
-                });
-
-            if (config_it != buffer_endpoint_config_s.end()) {
-                register_new_incoming_session_internal(*config_it);
-            } else {
-                // Will delete!
-                static endpoint_config_type config_tmp = {
-                    {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
-                    noise::noise_role::INITIATOR,
-                    {},
-                    {}};
-                add_endpoint_config_internal(config_tmp);
-                register_new_incoming_session_internal(config_tmp);
-            }
-            session_info_it = incoming_session_s.end() - 1;
-            handle_session(*session_info_it);
-            if (!protocol::try_handle(*session_info_it, pckt))
-                throw session_error("Received invalid packet.");
-        }
     } catch (const base_error &excp) {
         log.error("{}-{}: {}", session_info_it->get_remote_endpoint_address(),
                   session_info_it->get_constructed_random_uint16(), excp.what());
         delete_registered_session_internal(
             std::size_t(std::distance(registered_session_s.begin(), session_info_it)));
         return {{}, -1};
+    }
+
+    // Registers new session if session is not found
+    if (session_info_it == registered_session_s.end()) {
+        buffer_endpoint_config_s_type::iterator config_it = std::find_if(
+            buffer_endpoint_config_s.begin(), buffer_endpoint_config_s.end(),
+            [&remote_endpoint](const auto &config) {
+                return config.get().endpoint.address == remote_endpoint.address;
+            });
+
+		// FIXME
+        if (config_it != buffer_endpoint_config_s.end()) {
+            register_new_incoming_session_internal(*config_it);
+        } else {
+            static endpoint_config_type config_tmp = {
+                {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
+                noise::noise_role::INITIATOR,
+                {},
+                {}};
+            add_endpoint_config_internal(config_tmp);
+            register_new_incoming_session_internal(config_tmp);
+        }
+        session_info_it = incoming_session_s.end() - 1;
+        handle_session(*session_info_it);
+        if (!protocol::try_handle(*session_info_it, pckt)) {
+            delete_incoming_session_internal(std::size_t(
+                std::distance(registered_session_s.begin(), session_info_it)));
+            return {{}, -1};
+        }
     }
 
     session_info_it->last_received_ms = get_now_ms();
@@ -351,8 +354,8 @@ void essu::session_handler::delete_incoming_session_internal(
     decltype(auto) session_info = incoming_session_s[session_info_it];
     log.info("{}-{}: {}", session_info.get_remote_endpoint_address(),
              session_info.get_constructed_random_uint16(), "Incoming session removed.");
-    
-	incoming_session_s.erase(incoming_session_s.begin() + session_info_it);
+
+    incoming_session_s.erase(incoming_session_s.begin() + session_info_it);
 }
 void essu::session_handler::handle_session(session_info_type_extended &session_info) {
     scope_guard    sc([this] { this->cv_io.notify_all(); });
@@ -366,14 +369,16 @@ void essu::session_handler::handle_session(session_info_type_extended &session_i
     // If status of session is START or STOP:
     if (session_status == session_info_type::handshake_status_enum::START) {
         protocol::start_handshake(session_info);
-        log.info("{}-{}: {} Performing handshake...", session_info.get_remote_endpoint_address(),
-             session_info.get_constructed_random_uint16(), 
+        log.info("{}-{}: {} Performing handshake...",
+                 session_info.get_remote_endpoint_address(),
+                 session_info.get_constructed_random_uint16(),
                  std::string_view(
                      noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     } else if (session_status == session_info_type::handshake_status_enum::STOP) {
         protocol::stop_handshake(session_info);
-        log.info("{}-{}: {} Handshake completed.", session_info.get_remote_endpoint_address(),
-             session_info.get_constructed_random_uint16(), 
+        log.info("{}-{}: {} Handshake completed.",
+                 session_info.get_remote_endpoint_address(),
+                 session_info.get_constructed_random_uint16(),
                  std::string_view(
                      noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     }
