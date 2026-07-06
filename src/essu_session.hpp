@@ -21,6 +21,13 @@ public:
           last_received_ms(get_now_ms()) {}
     session_info_type_extended(session_info_type_extended &&) = default;
 
+public:
+    decltype(auto) get_remote_endpoint_address() const {
+        decltype(auto) remote_endpoint = this->get_remote_endpoint();
+        return network::utils::bytes_address_to_string(
+            remote_endpoint.address, remote_endpoint.v);
+    }
+
 private:
     std::size_t last_received_ms;
 };
@@ -30,7 +37,7 @@ class session_handler : public network::action<packet_type>, noncopyable {
 
 public:
     struct packet_type_extended : public packet_type {
-        std::size_t session_info_it;
+        noheap::ssize_t session_info_it;
     };
 
 private:
@@ -58,7 +65,8 @@ public:
         std::reference_wrapper<const endpoint_config_type>, max_session_number>;
 
 public:
-    inline session_handler(config_type &_config) : config(_config) {}
+    inline session_handler(const log_handler &handler, config_type &_config)
+        : log(handler.create_proxy({"ESSU_HANDLER"})), config(_config) {}
 
 public:
     inline void        add_endpoint_config(const endpoint_config_type &endpoint_config);
@@ -84,17 +92,16 @@ public:
 private:
     inline void add_endpoint_config_internal(const endpoint_config_type &endpoint_config);
     inline void
-                register_new_session_internal(buffer_session_s_type      &session_s,
-                                              const endpoint_config_type &endpoint_config);
+        register_new_session_internal(const endpoint_config_type &endpoint_config);
+    inline void register_new_incoming_session_internal(
+        const endpoint_config_type &endpoint_config);
     inline void register_incoming_session_internal(std::size_t session_info_it);
     inline void delete_registered_session_internal(std::size_t session_info_it);
     inline void delete_incoming_session_internal(std::size_t session_info_it);
     inline void handle_session(session_info_type_extended &session_info);
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("ESSU_SESSION_HANDLER");
-    static constexpr log_handler log{buffer_owner};
+    log_handler::proxy log;
 
 private:
     mutable std::shared_mutex   m_run;
@@ -122,12 +129,13 @@ void essu::session_handler::add_endpoint_config(
 void essu::session_handler::register_new_session(
     const endpoint_config_type &endpoint_config) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
-    register_new_session_internal(registered_session_s, endpoint_config);
+    register_new_session_internal(endpoint_config);
 }
 // Adds a incoming session from incoming session buffer to registered session buffer
 void essu::session_handler::register_incoming_session(std::size_t session_info_it) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
     register_incoming_session_internal(session_info_it);
+    delete_incoming_session_internal(session_info_it);
 }
 // Delete the session from registered session buffer
 void essu::session_handler::delete_registered_session(std::size_t session_info_it) {
@@ -158,17 +166,19 @@ noheap::runtime_error essu::session_handler::get_error() const {
 void essu::session_handler::push_packet(packet_type_extended &&pckt) {
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
-    if (pckt.session_info_it >= registered_session_s.size())
-        log.throw_exception<noheap::runtime_error>("Invalid the index of session info.");
+    if (std::size_t(pckt.session_info_it) >= registered_session_s.size())
+        log.abort("Invalid the index of session info.");
     decltype(auto) session_info = registered_session_s[pckt.session_info_it];
 
     // Prepares the packet
     try {
         handle_session(session_info);
         protocol::prepare(session_info, pckt);
-    } catch (const base_error &) {
+    } catch (const base_error &excp) {
+        log.error("{}-{}: {}", session_info.get_remote_endpoint_address(),
+                  session_info.get_constructed_random_uint16(), excp.what());
         delete_registered_session_internal(pckt.session_info_it);
-        throw;
+        return;
     }
     send_buffer.push_back(pckt);
 
@@ -180,61 +190,55 @@ essu::session_handler::packet_type_extended essu::session_handler::pop_packet() 
     std::unique_lock<decltype(m_run)> m_run_lock(m_run);
 
     packet_type    pckt            = receive_buffer.pop_front();
-    decltype(auto) session_info_it = registered_session_s.end();
+    decltype(auto) session_info_it = registered_session_s.begin();
     decltype(auto) remote_endpoint = pckt.get_endpoint();
 
-    // Finds suitable session by packet
-    for (decltype(auto) it = registered_session_s.begin();
-         it < registered_session_s.end(); ++it) {
-        try {
-            handle_session(*it);
-            if (protocol::try_handle(*it, pckt)) {
-				session_info_it = it;
+    try {
+        // Finds suitable session by packet
+        for (; session_info_it < registered_session_s.end(); ++session_info_it) {
+            handle_session(*session_info_it);
+            if (protocol::try_handle(*session_info_it, pckt)) {
                 break;
             }
-        } catch (const base_error &) {
-            delete_registered_session_internal(std::size_t(
-                std::distance(registered_session_s.begin(), session_info_it)));
-            throw;
         }
-    }
 
-    // Registers new session if session is not found
-    if (session_info_it == registered_session_s.end()) {
-        buffer_endpoint_config_s_type::iterator config_it = std::find_if(
-            buffer_endpoint_config_s.begin(), buffer_endpoint_config_s.end(),
-            [&remote_endpoint](const auto &config) {
-                return config.get().endpoint.address == remote_endpoint.address;
-            });
+        // Registers new session if session is not found
+        if (session_info_it == registered_session_s.end()) {
+            buffer_endpoint_config_s_type::iterator config_it = std::find_if(
+                buffer_endpoint_config_s.begin(), buffer_endpoint_config_s.end(),
+                [&remote_endpoint](const auto &config) {
+                    return config.get().endpoint.address == remote_endpoint.address;
+                });
 
-        if (config_it != buffer_endpoint_config_s.end()) {
-            register_new_session_internal(incoming_session_s, *config_it);
-        } else {
-            // Will delete!
-            static endpoint_config_type config_tmp = {
-                {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
-                noise::noise_role::INITIATOR,
-                {},
-                {}};
-            add_endpoint_config_internal(config_tmp);
-            register_new_session_internal(incoming_session_s, config_tmp);
-        }
-        session_info_it = incoming_session_s.end() - 1;
-        try {
+            if (config_it != buffer_endpoint_config_s.end()) {
+                register_new_incoming_session_internal(*config_it);
+            } else {
+                // Will delete!
+                static endpoint_config_type config_tmp = {
+                    {remote_endpoint.v, remote_endpoint.address, remote_endpoint.port},
+                    noise::noise_role::INITIATOR,
+                    {},
+                    {}};
+                add_endpoint_config_internal(config_tmp);
+                register_new_incoming_session_internal(config_tmp);
+            }
+            session_info_it = incoming_session_s.end() - 1;
             handle_session(*session_info_it);
             if (!protocol::try_handle(*session_info_it, pckt))
-                session_info_it->get_log().throw_exception<session_error>("Received invalid packet.");
-        } catch (const base_error &) {
-            delete_registered_session_internal(std::size_t(
-                std::distance(registered_session_s.begin(), session_info_it)));
-            throw;
+                throw session_error("Received invalid packet.");
         }
+    } catch (const base_error &excp) {
+        log.error("{}-{}: {}", session_info_it->get_remote_endpoint_address(),
+                  session_info_it->get_constructed_random_uint16(), excp.what());
+        delete_registered_session_internal(
+            std::size_t(std::distance(registered_session_s.begin(), session_info_it)));
+        return {{}, -1};
     }
+
     session_info_it->last_received_ms = get_now_ms();
     cv_io.notify_one();
 
-    return {pckt,
-            std::size_t(std::distance(registered_session_s.begin(), session_info_it))};
+    return {pckt, std::distance(registered_session_s.begin(), session_info_it)};
 }
 bool essu::session_handler::exist_received_packets() const {
     std::shared_lock<decltype(m_run)> m_run_lock(m_run);
@@ -276,62 +280,79 @@ void essu::session_handler::set_error(const noheap::runtime_error &_excp) {
 void essu::session_handler::add_endpoint_config_internal(
     const endpoint_config_type &endpoint_config) {
     if (buffer_endpoint_config_s.size() == max_session_number)
-        log.throw_exception<session_error>("Failed to add config of endpoint.");
+        log.throw_and_log<noheap::runtime_error>({}, "Failed to add config of endpoint.");
 
     // Saves passed config of endpoint
     buffer_endpoint_config_s.push_back(
         std::reference_wrapper<const endpoint_config_type>(endpoint_config));
 }
 void essu::session_handler::register_new_session_internal(
-    buffer_session_s_type &session_s, const endpoint_config_type &endpoint_config) {
-    if (session_s.size() == max_session_number)
-        log.throw_exception<session_error>("Failed to add session.");
+    const endpoint_config_type &endpoint_config) {
+    if (registered_session_s.size() == max_session_number)
+        log.throw_and_log<noheap::runtime_error>({}, "Failed to add session.");
 
-    // Creates new session with this config
-    decltype(auto) endpoint_config_it =
-        std::find_if(buffer_endpoint_config_s.begin(), buffer_endpoint_config_s.end(),
-                     [&endpoint_config](const auto &_endpoint_config) {
-                         return &_endpoint_config.get() == &endpoint_config;
-                     });
-    if (endpoint_config_it == buffer_endpoint_config_s.end())
-        log.throw_exception<session_error>("Config of endpoint is not added.");
+    registered_session_s.emplace_back(
+        endpoint_config.endpoint, endpoint_config.local_role, config.ext,
+        endpoint_config.public_key, endpoint_config.pre_shared_key, config.keypair);
 
-    decltype(auto) endpoint_config_r = endpoint_config_it->get();
-    session_s.emplace_back(endpoint_config_r.endpoint, endpoint_config_r.local_role,
-                           config.ext, endpoint_config_r.public_key,
-                           endpoint_config_r.pre_shared_key, config.keypair);
+    decltype(auto) session_info = registered_session_s[registered_session_s.size() - 1];
+    log.info("{}-{}: {}", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(), "New session registered.");
+}
+void essu::session_handler::register_new_incoming_session_internal(
+    const endpoint_config_type &endpoint_config) {
+    if (incoming_session_s.size() == max_session_number)
+        log.throw_and_log<noheap::runtime_error>({}, "Failed to add session.");
 
-    session_s[session_s.size() - 1].get_log().to_all("New session registered.");
+    incoming_session_s.emplace_back(endpoint_config.endpoint, endpoint_config.local_role,
+                                    config.ext, endpoint_config.public_key,
+                                    endpoint_config.pre_shared_key, config.keypair);
+
+    decltype(auto) session_info = incoming_session_s[incoming_session_s.size() - 1];
+    log.info("{}-{}: {}", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(),
+             "New incoming session registered.");
 }
 void essu::session_handler::register_incoming_session_internal(
     std::size_t session_info_it) {
     if (incoming_session_s.size() == max_session_number)
-        log.throw_exception<session_error>("Failed to add session.");
+        log.throw_and_log<noheap::runtime_error>({}, "Failed to add session.");
 
     // Copies new session
     if (session_info_it >= incoming_session_s.size())
-        log.throw_exception<session_error>("Incoming session info does not exist.");
+        log.throw_and_log<noheap::runtime_error>({},
+                                                 "Invalid the index of session info.");
 
     registered_session_s.push_back(std::move(incoming_session_s[session_info_it]));
 
-    incoming_session_s[incoming_session_s.size() - 1].get_log().to_all(
-        "Incoming session registered.");
+    decltype(auto) session_info = registered_session_s[registered_session_s.size() - 1];
+    log.info("{}-{}: {}", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(),
+             "Incoming session registered.");
 }
 void essu::session_handler::delete_registered_session_internal(
     std::size_t session_info_it) {
     if (session_info_it >= registered_session_s.size())
-        log.throw_exception<noheap::runtime_error>("Invalid the index of session info.");
+        log.throw_and_log<noheap::runtime_error>({},
+                                                 "Invalid the index of session info.");
 
-    registered_session_s[session_info_it].get_log().to_all("Registered session removed.");
+    decltype(auto) session_info = registered_session_s[session_info_it];
+    log.info("{}-{}: {}", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(), "Session removed.");
+
     registered_session_s.erase(registered_session_s.begin() + session_info_it);
 }
 void essu::session_handler::delete_incoming_session_internal(
     std::size_t session_info_it) {
     if (session_info_it >= incoming_session_s.size())
-        log.throw_exception<noheap::runtime_error>("Invalid the index of session info.");
+        log.throw_and_log<noheap::runtime_error>({},
+                                                 "Invalid the index of session info.");
 
-    incoming_session_s[session_info_it].get_log().to_all("Incoming session removed.");
-    incoming_session_s.erase(incoming_session_s.begin() + session_info_it);
+    decltype(auto) session_info = incoming_session_s[session_info_it];
+    log.info("{}-{}: {}", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(), "Incoming session removed.");
+    
+	incoming_session_s.erase(incoming_session_s.begin() + session_info_it);
 }
 void essu::session_handler::handle_session(session_info_type_extended &session_info) {
     scope_guard    sc([this] { this->cv_io.notify_all(); });
@@ -340,22 +361,21 @@ void essu::session_handler::handle_session(session_info_type_extended &session_i
 
     // Tries to control session and handles possible errors
     if (now_ms - session_info.last_received_ms >= timeout_ms)
-        session_info.get_log().throw_exception<session_error>(
-            "Timeout has been reached.");
+        throw session_error("Timeout has been reached.");
 
     // If status of session is START or STOP:
     if (session_status == session_info_type::handshake_status_enum::START) {
         protocol::start_handshake(session_info);
-        session_info.get_log().to_all(
-            "{} Performing handshake...",
-            std::string_view(
-                noheap::hex_encode(protocol::get_current_state_hash(session_info))));
+        log.info("{}-{}: {} Performing handshake...", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(), 
+                 std::string_view(
+                     noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     } else if (session_status == session_info_type::handshake_status_enum::STOP) {
         protocol::stop_handshake(session_info);
-        session_info.get_log().to_all(
-            "{} Handshake completed.",
-            std::string_view(
-                noheap::hex_encode(protocol::get_current_state_hash(session_info))));
+        log.info("{}-{}: {} Handshake completed.", session_info.get_remote_endpoint_address(),
+             session_info.get_constructed_random_uint16(), 
+                 std::string_view(
+                     noheap::hex_encode(protocol::get_current_state_hash(session_info))));
     }
 }
 

@@ -472,11 +472,6 @@ private:
     static void handle_error(std::size_t error, std::string_view extention_error);
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("NOISE_CONTEXT");
-    static constexpr log_handler log{buffer_owner};
-
-private:
     NoiseHandshakeState *handshakestate = nullptr;
 
     cipher_state cipher_st{};
@@ -1122,9 +1117,9 @@ void noise::noise_context<_config>::handle_error(std::size_t      error,
     if (error) {
         noheap::buffer_chars_type<64> buffer_noise_error{};
         noise_strerror(error, buffer_noise_error.data(), buffer_noise_error.size());
-        log.throw_exception("{} {}", extention_error, buffer_noise_error.data());
+        throw noheap::runtime_error("{} {}", extention_error, buffer_noise_error.data());
     } else
-        log.throw_exception("{}", extention_error);
+        throw noheap::runtime_error("{}", extention_error);
 }
 
 #endif

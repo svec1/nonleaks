@@ -36,6 +36,9 @@ public:
     using buffer_config_type = noheap::buffer_type<char, max_size_config>;
 
 public:
+    inline json_config(const log_handler &handler);
+
+public:
     inline void set_buffer_config(const buffer_config_type &buffer, bool new_keypair);
     inline void get_buffer_config(buffer_config_type &buffer);
 
@@ -47,9 +50,7 @@ private:
                               const std::string_view field_string);
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("JSON_CONFIG");
-    static constexpr log_handler log{buffer_owner};
+    log_handler::proxy log;
 
 private:
     config_type config{};
@@ -60,20 +61,19 @@ public:
     static constexpr std::size_t workers_number = essu::max_session_number + 2;
 
 public:
-    inline xxcore_service(config_type &config);
+    inline xxcore_service(const log_handler &handler, config_type &config);
     inline void run();
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("UUV_SERVICE");
-    static constexpr log_handler log{buffer_owner};
+    log_handler::proxy log;
 
 private:
     config_type     &config;
     asio::io_context io;
 };
 
-xxcore_service::xxcore_service(config_type &_config) : config(_config) {
+xxcore_service::xxcore_service(const log_handler &handler, config_type &_config)
+    : log(handler.create_proxy({"XXCORE"})), config(_config) {
 }
 
 void xxcore_service::run() {
@@ -84,9 +84,13 @@ void xxcore_service::run() {
     for (auto &worker : workers)
         worker = typename std::decay_t<decltype(worker)>{[this] { this->io.run(); }};
 
+    log.info("Start...");
+
+    // For testing: will be deleted
     {
-        essu::session_handler                      action(config.local_config);
-        network::udp_stream<essu::session_handler> stream(action, io, config.listen_port);
+        essu::session_handler action(log.get_handler(), config.local_config);
+        network::udp_stream<essu::session_handler> stream(log.get_handler(), action, io,
+                                                          config.listen_port);
         scope_guard                                session_stop([&] {
             stream.close();
             io.stop();
@@ -99,39 +103,33 @@ void xxcore_service::run() {
 
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
 
-        log.to_all("Start...");
-
-        // For testing: will be deleted
         {
-			while (action.is_valid()) {
-                try {
-                    while (action.exist_received_packets())
-                        (void) action.pop_packet();
-					for (std::size_t it = 0; it < action.get_registered_session_s_size();
-                         ++it) {
-                        essu::packet_type pckt;
-                        essu::set_dummy_packet(pckt);
-                        action.push_packet({pckt, it});
-                    }
-                    for (std::size_t it = 0; it < action.get_incoming_session_s_size();
-                         ++it)
-                        action.register_incoming_session(it);
-
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                } catch (essu::base_error &excp) {
-                    log.to_all("{}", excp.what());
+            while (action.is_valid()) {
+                while (action.exist_received_packets())
+                    (void) action.pop_packet();
+                for (std::size_t it = 0; it < action.get_registered_session_s_size();
+                     ++it) {
+                    essu::packet_type pckt;
+                    essu::set_dummy_packet(pckt);
+                    action.push_packet({pckt, noheap::ssize_t(it)});
                 }
+                for (std::size_t it = 0; it < action.get_incoming_session_s_size(); ++it)
+                    action.register_incoming_session(it);
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
             throw action.get_error();
         }
-
-        log.to_all("Stop.");
     }
+
+    log.info("Stop.");
 
     for (auto &worker : workers)
         worker.get();
 }
-
+json_config::json_config(const log_handler &handler)
+    : log(handler.create_proxy({"JSON_CONFIG"})) {
+}
 void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_keypair) {
     noheap::buffer_bytes_type<BOOST_JSON_STACK_BUFFER_SIZE, noheap::ubyte>
         json_buffer_tmp;
@@ -146,8 +144,8 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
                                       bool hex_encoding = true) {
         auto string_key = this->get_object_field<std::string_view>(object, field_name);
         if (string_key.size() >= buffer_key.size() && !hex_encoding)
-            throw noheap::runtime_error(buffer_owner,
-                                        "The key[{}] field has a large size", field_name);
+            log.throw_and_log<noheap::runtime_error>({}, "The key[{}] field has a large size",
+                                             field_name);
 
         if (hex_encoding) {
             decltype(noheap::hex_encode(buffer_key)) buffer_key_hex{};
@@ -185,8 +183,8 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
                                                  global_field_key.data());
                          })
             != config.endpoint_config_s.end())
-            throw noheap::runtime_error(buffer_owner, "Endpoint[{}] is already exist.",
-                                        global_field_key.data());
+            log.throw_and_log<noheap::runtime_error>({}, "Endpoint[{}] is already exist.",
+                                             global_field_key.data());
 
         decltype(config_type::endpoint_config_s)::value_type::second_type
             endpoint_config{};
@@ -276,23 +274,21 @@ template<typename T>
 T json_config::get_object_field(const json::object    &object,
                                 const std::string_view field_string) {
     if (!object.contains(field_string))
-        throw noheap::runtime_error(buffer_owner, "Field[{}] does not existed.",
-                                    field_string);
+        log.throw_and_log<noheap::runtime_error>({}, "Field[{}] does not existed.", field_string);
     decltype(auto) field = object.at(field_string);
     if constexpr (std::same_as<T, bool>) {
         if (!field.is_bool())
-            throw noheap::runtime_error(buffer_owner, "Field[{}] must be bool.",
-                                        field_string);
+            log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be bool.", field_string);
         return field.as_bool();
     } else if constexpr (std::is_integral_v<T>) {
         if (!field.is_int64())
-            throw noheap::runtime_error(buffer_owner, "Field[{}] must be number.",
-                                        field_string);
+            log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be number.",
+                                             field_string);
         return field.as_int64();
     } else if constexpr (std::same_as<T, std::string_view>) {
         if (!field.is_string())
-            throw noheap::runtime_error(buffer_owner, "Field[{}] must be string.",
-                                        field_string);
+            log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be string.",
+                                             field_string);
         return field.as_string();
     } else
         static_assert(false, "Invalid T type.");

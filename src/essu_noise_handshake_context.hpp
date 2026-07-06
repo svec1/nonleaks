@@ -67,11 +67,6 @@ private:
     inline void update_current_state_hash();
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("NOISE_HANDSHAKE_CONTEXT");
-    static constexpr log_handler log{buffer_owner};
-
-private:
     status_enum status;
 
     noise_context_type                                      noise_context;
@@ -97,6 +92,7 @@ private:
     buffer_unique_value_type                      unique_value{};
     std::uint16_t                                 available_batch_number{};
     std::uint64_t                                 handshake_id{};
+    std::uint16_t                                 handshake_attempt_number{};
 };
 
 } // namespace essu
@@ -115,7 +111,6 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
 
     decltype(auto) control_unit = get_control_unit(pckt);
 
-    // Gets noise message
     if (!fragmentation) {
         // Generates random value
         if (status == status_enum::HS3) {
@@ -125,8 +120,13 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
                                                              handshake_payload.size());
         }
 
-        noise_context.get_handshake_buffer().set(buffer_handshake_message, 0);
-        noise_context.set_handshake_message();
+        // Gets noise message
+        try {
+            noise_context.get_handshake_buffer().set(buffer_handshake_message, 0);
+            noise_context.set_handshake_message();
+        } catch (const noheap::runtime_error &excp) {
+            throw protocol_error("Failed to set handshake message: {}", excp.what());
+        }
     }
 
     // Copy payload of the noise message
@@ -144,7 +144,7 @@ void essu::noise_handshake_context::init_packet(packet_type &pckt) {
     else if (status == status_enum::HS3)
         control_unit.header.type = unit_type::unit_type_enum::session_confirmed;
     else
-        this->log.abort_invalid_state();
+        abort_invalid_state();
 
     // If fragmentation
     if (offset_noise_handshake_unit < noise_context.get_handshake_buffer().get().size) {
@@ -178,7 +178,7 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
     else if (status == status_enum::HS3)
         payload_size = noise_config.get_hs3_size();
     else
-        this->log.abort_invalid_state();
+        abort_invalid_state();
 
     if ((status == status_enum::HS1
          && control_unit.header.type != unit_type::unit_type_enum::session_request)
@@ -186,7 +186,7 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
             && control_unit.header.type != unit_type::unit_type_enum::session_created)
         || (status == status_enum::HS3
             && control_unit.header.type != unit_type::unit_type_enum::session_confirmed))
-        this->log.throw_exception<protocol_error>("Invalid type of handshake packet.");
+        throw protocol_error("Invalid type of handshake packet.");
 
     // Copies accepted unit to buffer of noise handshake message
     std::copy(control_unit.buffer.begin(), control_unit.buffer.end(),
@@ -202,8 +202,12 @@ void essu::noise_handshake_context::handle_packet(packet_type &&pckt) {
         noise_context.get_handshake_payload_buffer().set(handshake_payload, 0);
 
     // Sets noise message
-    noise_context.get_handshake_buffer().set(buffer_handshake_message, payload_size);
-    noise_context.get_handshake_message();
+    try {
+        noise_context.get_handshake_buffer().set(buffer_handshake_message, payload_size);
+        noise_context.get_handshake_message();
+    } catch (const noheap::runtime_error &excp) {
+        throw protocol_error("Failed to get handshake message{}", excp.what());
+    }
 
     buffer_handshake_message    = {};
     offset_noise_handshake_unit = 0;
@@ -292,12 +296,18 @@ void essu::noise_handshake_context::start() {
 
     generate_pair_ephemeral_obfs_key();
 
-    noise_context.init(role);
-    noise_context.set_prologue(ext);
-    noise_context.set_local_keypair(local_keypair);
-    noise_context.set_remote_public_key(remote_public_key);
-    noise_context.set_pre_shared_key(pre_shared_key);
-    noise_context.start();
+    try {
+        noise_context.init(role);
+        noise_context.set_prologue(ext);
+        noise_context.set_local_keypair(local_keypair);
+        noise_context.set_remote_public_key(remote_public_key);
+        noise_context.set_pre_shared_key(pre_shared_key);
+        noise_context.start();
+    } catch (const noheap::runtime_error &excp) {
+        throw protocol_error("Failed to start handshake: {}", excp.what());
+    }
+
+    ++handshake_attempt_number;
 }
 void essu::noise_handshake_context::stop() {
     check_noise_action(noise::noise_action::SPLIT);
@@ -308,65 +318,78 @@ void essu::noise_handshake_context::stop() {
         if (remote_public_key == noise_context_type::buffer_key_type{})
             remote_public_key = handshake_remote_public_key;
         else
-            this->log.throw_exception<protocol_error>(
-                "Invalid remote public key from handshake.");
+            throw protocol_error("Invalid remote public key from handshake.");
     }
 
-    noise_context.stop();
+    try {
+        noise_context.stop();
+    } catch (const noheap::runtime_error &excp) {
+        throw protocol_error("Failed to stop handshake: {}", excp.what());
+    }
     payload_cipher_state = std::move(noise_context.get_cipher_state());
     handshake_hash       = noise_context.get_handshake_hash();
     generate_posthandshake_unique_values();
 
     noise_context.dump();
 
-    status = status_enum(static_cast<std::size_t>(status) + 1);
+    status                   = status_enum(static_cast<std::size_t>(status) + 1);
+    handshake_attempt_number = 0;
 }
 void essu::noise_handshake_context::check_noise_action(noise::noise_action expected) {
     auto action = noise_context.get_action();
 
     if (action == noise::noise_action::FAILED)
-        this->log.throw_exception<protocol_error>("Failed to handshake.");
+        throw protocol_error("Failed to handshake.");
 
     if (action == expected
         || (expected == noise::noise_action::WRITE_MESSAGE && fragmentation))
         return;
 
     if (action == noise::noise_action::WRITE_MESSAGE)
-        this->log.throw_exception<noheap::runtime_error>("Expected message to be sent.");
+        throw protocol_error("Expected message to be sent.");
     else if (action == noise::noise_action::READ_MESSAGE)
-        this->log.throw_exception<noheap::runtime_error>(
-            "Expected message to be received.");
+        throw protocol_error("Expected message to be received.");
     else if (action == noise::noise_action::SPLIT)
-        this->log.throw_exception<noheap::runtime_error>("Expected to stop handshake.");
+        throw protocol_error("Expected to stop handshake.");
     else if (action == noise::noise_action::COMPLETE)
-        this->log.throw_exception<noheap::runtime_error>("Handshake already completed.");
+        throw protocol_error("Handshake already completed.");
     else if (action == noise::noise_action::NONE)
-        this->log.throw_exception<noheap::runtime_error>("Action is not required.");
+        throw protocol_error("Action is not required.");
     else
-        this->log.abort_invalid_state();
+        abort_invalid_state();
 }
 
 // Generates ephemeral header obfuscation key + ephmeral obfuscation key for HS1
 void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
-    typename noise_context_type::buffer_key_type public_key{};
-
-    // Mixes the empty public key with own and remote public keys
-    if (remote_public_key != noise_context_type::buffer_key_type{}) {
-        noheap::transform_buffers(public_key, local_keypair.pub, std::bit_xor{});
-        noheap::transform_buffers(public_key, remote_public_key, std::bit_xor{});
-    }
-    noheap::transform_buffers(public_key, unique_value, std::bit_xor{});
-
-    // Gets 32 bytes-hash of public key
-    auto public_key_hash = noheap::clip_buffer<32, 0>(hash_state.get_hash(public_key));
-
-    // Generates keystream
+    noise_context_type::cipher_state cipher_tmp;
+    noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type>
+                       + noise_config.mac_size>
+        shared_handshake_value{};
     noise::buffer_type<noheap::buffer_size<noise_context_type::buffer_key_type> * 2
                        + sizeof(std::uint64_t) + noise_config.mac_size>
-                                     keystream{};
-    noise_context_type::cipher_state cipher_tmp;
+        keystream{};
+
+    // Mixes the shared_handshake_value with own and remote public keys
+    if (remote_public_key != noise_context_type::buffer_key_type{}) {
+        noheap::transform_buffers(shared_handshake_value, local_keypair.pub,
+                                  std::bit_xor{});
+        noheap::transform_buffers(shared_handshake_value, remote_public_key,
+                                  std::bit_xor{});
+    }
+
+    // Encrypts shared_handshake_value with unique_value
+    cipher_tmp.encrypt_buffer.set(shared_handshake_value,
+                                  shared_handshake_value.size() - noise_config.mac_size);
+    cipher_tmp.set_encrypt_key(
+        noheap::clip_buffer<32, 0>(hash_state.get_hash(unique_value)));
+    cipher_tmp.set_encrypt_nonce({});
+	cipher_tmp.set_encrypt_counter_block(handshake_attempt_number);
+    cipher_tmp.encrypt({});
+
+    // Generates keystream: encrypts keystream which is filled zeros with shared_handshake_value
     cipher_tmp.encrypt_buffer.set(keystream, keystream.size() - noise_config.mac_size);
-    cipher_tmp.set_encrypt_key(public_key_hash);
+    cipher_tmp.set_encrypt_key(noheap::clip_buffer<32, 0>(hash_state.get_hash(shared_handshake_value)));
+    cipher_tmp.set_encrypt_nonce({});
     cipher_tmp.encrypt({});
 
     // Gets two ephemeral header obfuscation keys

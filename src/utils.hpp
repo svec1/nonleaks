@@ -33,6 +33,15 @@ public:
     noncopyable(const noncopyable &)            = delete;
     noncopyable &operator=(const noncopyable &) = delete;
 };
+class nonmoveable {
+public:
+    nonmoveable()                               = default;
+    ~nonmoveable()                              = default;
+    nonmoveable(nonmoveable &&)                 = delete;
+    nonmoveable &operator=(nonmoveable &&)      = delete;
+    nonmoveable(const nonmoveable &)            = default;
+    nonmoveable &operator=(const nonmoveable &) = default;
+};
 
 namespace noheap {
 using ssize_t = std::make_signed_t<std::size_t>;
@@ -195,14 +204,13 @@ public:
     static void out(std::format_string<Args...> format, Args &&...args) {
         buffer_type buffer;
         std::size_t out_size =
-            std::formatted_size(format, std::forward<Args>(args)...) + 2;
+            std::formatted_size(format, std::forward<Args>(args)...) + 1;
         if (noheap::buffer_size<decltype(buffer)> < out_size)
             throw const_runtime_error("Formattable output has large size.");
 
-        auto end_it       = std::format_to_n(buffer.begin(), buffer_size, format,
-                                             std::forward<Args>(args)...);
-        *end_it.out       = end_ch;
-        *(end_it.out + 1) = '\0';
+        auto end_it = std::format_to_n(buffer.begin(), buffer_size, format,
+                                       std::forward<Args>(args)...);
+        *end_it.out = end_ch;
 
         out_buffer(buffer, out_size);
     }
@@ -224,39 +232,33 @@ constexpr void println(std::format_string<Args...> format, Args &&...args) {
 
 class log_impl final {
 public:
-    struct owner_impl final {
-        static constexpr std::size_t buffer_size = 64;
+    struct message_type final {
+        static constexpr std::size_t buffer_size = 10;
         using buffer_type                        = buffer_chars_type<buffer_size>;
-    };
-
-    static consteval owner_impl::buffer_type create_owner(std::string_view owner) {
-        return to_buffer<owner_impl::buffer_type::value_type, owner_impl::buffer_size>(
-            owner);
     };
 
     template<typename... Args>
     static constexpr print_impl::buffer_type
-        create_log_data(std::size_t &out_size, owner_impl::buffer_type buffer_owner,
+        create_log_data(std::size_t &out_size, message_type::buffer_type message_type,
                         std::format_string<Args...> format, Args &&...args) {
         print_impl::buffer_type buffer;
         auto                    end_it = buffer.begin();
+        auto                    time_now =
+            std::chrono::current_zone()->to_local(std::chrono::system_clock::now());
 
         out_size = 0;
-        if (buffer_owner[0] != '\0') {
-            out_size += std::formatted_size("[{}]: ", buffer_owner.data());
-            end_it =
-                std::format_to_n(buffer.begin(), out_size, "[{}]: ", buffer_owner.data())
-                    .out;
-        }
+        out_size += std::formatted_size("[{}] {:<10} ", time_now, message_type.data());
+        end_it = std::format_to_n(buffer.begin(), out_size, "[{}] {:<10} ", time_now,
+                                  message_type.data())
+                     .out;
 
-        out_size += std::formatted_size(format, std::forward<Args>(args)...) + 2;
+        out_size += std::formatted_size(format, std::forward<Args>(args)...) + 1;
         if (noheap::buffer_size<decltype(buffer)> < out_size)
             throw const_runtime_error("Formattable output has large size.");
 
         end_it =
             std::format_to_n(end_it, out_size, format, std::forward<Args>(args)...).out;
-        *end_it       = '\n';
-        *(end_it + 1) = '\0';
+        *end_it = '\n';
         return buffer;
     }
 };
@@ -281,32 +283,18 @@ public:
 
         set = true;
     }
-    template<typename... Args>
-    error(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
-          std::format_string<Args...>               format, Args &&...args)
-        : error(format, std::forward<Args>(args)...) {
-        set_owner(_buffer_owner);
-    }
 
     ~error() override = default;
 
 public:
-    void set_owner(log_impl::owner_impl::buffer_type _buffer_owner) noexcept {
-        buffer_owner = _buffer_owner;
-        owner_set    = true;
-    }
-
-public:
     const char *what() const noexcept override { return buffer.data(); }
-    log_impl::owner_impl::buffer_type get_owner() const noexcept { return buffer_owner; }
-    bool                              is_set() const noexcept { return set; }
-    bool                              owner_is_set() const noexcept { return owner_set; }
+    bool        is_set() const noexcept { return set; }
+    bool        owner_is_set() const noexcept { return owner_set; }
 
 private:
-    buffer_type                       buffer{};
-    log_impl::owner_impl::buffer_type buffer_owner{};
-    bool                              set{};
-    bool                              owner_set{};
+    buffer_type buffer{};
+    bool        set{};
+    bool        owner_set{};
 };
 
 class runtime_error : public error {
@@ -336,7 +324,7 @@ public:
     using buffer_type = std::array<value_type, buffer_size()>;
 
 protected:
-    buffer_type buffer{};
+    buffer_type buffer;
 };
 
 template<std::size_t _buffer_size>
@@ -773,163 +761,170 @@ private:
 
 } // namespace noheap
 
-class log_handler {
+template<std::size_t size>
+struct std::formatter<noheap::buffer_chars_type<size>> {
 public:
-    static constexpr std::size_t max_outstream_count = 2;
+    constexpr auto parse(std::format_parse_context &ctx) { return ctx.begin(); }
+    auto format(const noheap::buffer_chars_type<size> &s, std::format_context &ctx) const {
+        return std::format_to(ctx.out(), "{}", s.data());
+    }
+};
 
-    enum output_type : std::size_t { flush = 0, async };
+[[noreturn]] static void abort_invalid_state(std::size_t depth = 1) {
+    noheap::println("Invalid state.\n{}", boost::stacktrace::to_string(
+                                              boost::stacktrace::stacktrace(depth, 5)));
+    std::abort();
+}
 
+class log_handler : noncopyable {
 public:
-    constexpr log_handler(noheap::log_impl::owner_impl::buffer_type _buffer_owner)
-        : buffer_owner(_buffer_owner) {
-        out_streams[0] = 1;
-    }
-    constexpr log_handler(noheap::log_impl::owner_impl::buffer_type _buffer_owner,
-                          std::span<std::size_t>                    _out_streams)
-        : buffer_owner(_buffer_owner) {
-        if (out_streams.size() > max_outstream_count)
-            throw noheap::logic_error("The streams limit has been exceeded: {}.",
-                                      max_outstream_count);
-        for (std::size_t i = 0; i < out_streams.size(); ++i)
-            out_streams[i] = _out_streams[i];
-    }
+    static constexpr std::size_t max_outstream_count = 3;
 
-public:
-    template<output_type async = output_type::flush, typename... Args>
-    void to_console(std::format_string<Args...> format, Args &&...args) const {
-        this->log<async>(1, buffer_owner, format, std::forward<Args>(args)...);
-    }
+    class proxy : noncopyable {
+        friend class log_handler;
 
-    template<output_type async = output_type::flush, typename... Args>
-    void to_stream(std::size_t it_outstream, std::format_string<Args...> format,
-                   Args &&...args) const {
-        this->log<async>(out_streams.at(it_outstream), buffer_owner, format,
-                         std::forward<Args>(args)...);
-    }
+    public:
+        struct owner_impl final {
+            static constexpr std::size_t buffer_size = 16;
+            using buffer_type = noheap::buffer_chars_type<buffer_size>;
+        };
+        struct dynamic_owner_impl final {
+            static constexpr std::size_t buffer_size = 32;
+            using buffer_type = noheap::buffer_chars_type<buffer_size>;
+        };
 
-    template<output_type async = output_type::flush, typename... Args>
-    void to_all(std::format_string<Args...> format, Args &&...args) const {
-        std::for_each(out_streams.begin(), out_streams.end(), [&](std::size_t outstream) {
-            if (!outstream)
-                return;
-            this->log<async>(out_streams.at(outstream), buffer_owner, format,
-                             std::forward<Args>(args)...);
-        });
-    }
-    template<output_type async = output_type::flush, typename... Args>
-    void to_all_with_subowner(noheap::log_impl::owner_impl::buffer_type buffer_subowner,
-                              std::format_string<Args...> format, Args &&...args) const {
-        std::for_each(out_streams.begin(), out_streams.end(), [&](std::size_t outstream) {
-            if (!outstream)
-                return;
-            noheap::print_impl::buffer_type buffer;
-            auto                            end_it = buffer.begin();
+    private:
+        proxy(const log_handler &_handler, owner_impl::buffer_type _owner) noexcept
+            : handler(_handler), owner(_owner) {}
+
+    public:
+        proxy(proxy &&other) noexcept : proxy(other.handler, other.owner) {}
+        proxy &operator=(proxy &&) = delete;
+
+    public:
+        decltype(auto) get_handler() const { return handler; }
+
+        template<typename... Args>
+        void info(std::format_string<Args...> format, Args &&...args) const {
+            handler.info("{}",
+                         create_log_data(format, std::forward<Args>(args)...).data());
+        }
+        template<typename... Args>
+        void warning(std::format_string<Args...> format, Args &&...args) const {
+            handler.warning("{}",
+                            create_log_data(format, std::forward<Args>(args)...).data());
+        }
+        template<typename... Args>
+        void error(std::format_string<Args...> format, Args &&...args) const {
+            handler.error("{}",
+                          create_log_data(format, std::forward<Args>(args)...).data());
+        }
+        template<noheap::Derived_from_error TExcp, typename... Args>
+        [[noreturn]] void throw_and_log(TExcp &&excp, std::format_string<Args...> format,
+                                        Args &&...args) const {
+            handler.throw_and_log(
+                std::forward<TExcp>(excp), "{}",
+                create_log_data(format, std::forward<Args>(args)...).data());
+        }
+        template<typename... Args>
+        void exit(std::format_string<Args...> format, Args &&...args) const {
+            handler.exit("{}",
+                         create_log_data(format, std::forward<Args>(args)...).data());
+        }
+        template<typename... Args>
+        void abort(std::format_string<Args...> format, Args &&...args) const {
+            handler.abort("{}",
+                          create_log_data(format, std::forward<Args>(args)...).data());
+        }
+
+    private:
+        template<typename... Args>
+        noheap::print_impl::buffer_type
+            create_log_data(std::format_string<Args...> format, Args &&...args) const {
+            noheap::print_impl::buffer_type buffer_out{}, buffer_tmp{};
+            auto                            end_it = buffer_tmp.begin();
             end_it = std::format_to_n(end_it, noheap::print_impl::buffer_size, format,
                                       std::forward<Args>(args)...)
                          .out;
 
-            this->log<async>(outstream, "{} {}", buffer_subowner.data(), buffer.data());
-        });
+            end_it = buffer_out.begin();
+            std::format_to_n(end_it, noheap::print_impl::buffer_size, "{:<16} {}",
+                             owner.data(), buffer_tmp.data());
+            return buffer_out;
+        }
+
+    private:
+        const log_handler      &handler;
+        owner_impl::buffer_type owner;
+    };
+
+public:
+    log_handler(std::string_view file_name) {
+        fd_log = open(file_name.data(), O_CREAT | O_WRONLY | O_TRUNC,
+                      S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        if (fd_log == -1)
+            throw noheap::const_error("Failed to open log file.");
+    }
+    ~log_handler() noexcept(false) {
+        if (close(fd_log) == -1)
+            throw noheap::const_error("Failed to close log file.");
     }
 
-    template<noheap::Derived_from_error TExcp = noheap::runtime_error, typename... Args>
-    [[noreturn]] void throw_exception(std::format_string<Args...> format,
-                                      Args &&...args) const {
-		throw TExcp(this->buffer_owner, format, std::forward<Args>(args)...);
-    }
-
-    template<output_type async = output_type::flush, noheap::Derived_from_error TExcp>
-    void exception_to_all(const TExcp &excp) const {
-        std::for_each(out_streams.begin(), out_streams.end(), [&](std::size_t outstream) {
-            if (!outstream)
-                return;
-            this->log<async>(outstream, excp.get_owner(), "{}", excp.what());
-        });
+public:
+    proxy create_proxy(proxy::owner_impl::buffer_type owner) const noexcept {
+        return proxy(*this, owner);
     }
 
     template<typename... Args>
-    void abort(std::format_string<Args...> format, Args &&...args) const {
-        this->to_all(format, std::forward<Args>(args)...);
-        std::abort();
+    void info(std::format_string<Args...> format, Args &&...args) const {
+        this->log(1, {"INFO"}, format, std::forward<Args>(args)...);
     }
-    void abort_invalid_state() const {
-        this->to_all("Invalid state.\n{}",
-                     boost::stacktrace::to_string(boost::stacktrace::stacktrace(1, 5)));
+    template<typename... Args>
+    void warning(std::format_string<Args...> format, Args &&...args) const {
+        this->log(2, {"WARNING"}, format, std::forward<Args>(args)...);
+    }
+    template<typename... Args>
+    void error(std::format_string<Args...> format, Args &&...args) const {
+        this->log(2, {"ERROR"}, format, std::forward<Args>(args)...);
+    }
+    template<noheap::Derived_from_error TExcp, typename... Args>
+    [[noreturn]] void throw_and_log(TExcp &&excp, std::format_string<Args...> format,
+                                    Args &&...args) const {
+        error(format, std::forward<Args>(args)...);
+        throw std::forward<TExcp>(excp);
+    }
+    template<typename... Args>
+    void exit(std::format_string<Args...> format, Args &&...args) const {
+        this->fatal(format, std::forward<Args>(args)...);
+        std::exit(0);
+    }
+    template<typename... Args>
+    void abort(std::format_string<Args...> format, Args &&...args) const {
+        this->fatal(format, std::forward<Args>(args)...);
         std::abort();
     }
 
 private:
-    template<output_type async, typename... Args>
-    static constexpr void log(std::size_t                               outstream,
-                              noheap::log_impl::owner_impl::buffer_type buffer_owner,
-                              std::format_string<Args...> format, Args &&...args) {
-        std::size_t out_size;
-        auto buffer = noheap::log_impl::create_log_data(out_size, buffer_owner, format,
+    template<typename... Args>
+    void fatal(std::format_string<Args...> format, Args &&...args) const {
+        this->log(1, {"FATAL"}, format, std::forward<Args>(args)...);
+    }
+    template<typename... Args>
+    void log(std::size_t                                 outstream,
+             noheap::log_impl::message_type::buffer_type message_type,
+             std::format_string<Args...>                 format, Args &&...args) const {
+        std::lock_guard<decltype(m)> lock(m);
+        std::size_t                  out_size;
+        auto buffer = noheap::log_impl::create_log_data(out_size, message_type, format,
                                                         std::forward<Args>(args)...);
 
-        if constexpr (async == output_type::flush)
-            noheap::print_impl::out_buffer(buffer, out_size, outstream);
-        else {
-            static std::future<void> future_object;
-
-            if (future_object.valid())
-                future_object.get();
-
-            future_object = std::async(std::launch::async, noheap::print_impl::out_buffer,
-                                       buffer, out_size, outstream);
-        }
+        noheap::print_impl::out_buffer(buffer, out_size, outstream);
+        noheap::print_impl::out_buffer(buffer, out_size, fd_log);
     }
 
 private:
-    std::array<std::size_t, max_outstream_count> out_streams{};
-    noheap::log_impl::owner_impl::buffer_type    buffer_owner;
-};
-
-class log_proxy {
-public:
-    constexpr log_proxy(const log_handler &_log) : log(_log) {}
-    constexpr log_proxy(const log_handler                        &_log,
-                        noheap::log_impl::owner_impl::buffer_type _dynamic_owner)
-        : log(_log), dynamic_owner(_dynamic_owner) {}
-    constexpr log_proxy(log_proxy &&other)
-        : log(other.log), dynamic_owner(other.dynamic_owner) {}
-
-public:
-    void set_dynamic_owner(noheap::log_impl::owner_impl::buffer_type _dynamic_owner) {
-        dynamic_owner = _dynamic_owner;
-    }
-    template<typename T>
-    decltype(auto) get_log_handler(this T &&_this) {
-        return _this.log;
-    }
-
-    template<log_handler::output_type async = log_handler::output_type::flush,
-             typename... Args>
-    void to_all(std::format_string<Args...> format, Args &&...args) const {
-        noheap::print_impl::buffer_type buffer{};
-        auto                            end_it = buffer.begin();
-        end_it = std::format_to_n(end_it, noheap::print_impl::buffer_size, format,
-                                  std::forward<Args>(args)...)
-                     .out;
-
-        log.to_all("<{}> {}", dynamic_owner.data(), buffer.data());
-    }
-
-    template<noheap::Derived_from_error TExcp = noheap::runtime_error, typename... Args>
-    [[noreturn]] void throw_exception(std::format_string<Args...> format,
-                                      Args &&...args) const {
-        noheap::print_impl::buffer_type buffer{};
-        auto                            end_it = buffer.begin();
-        end_it = std::format_to_n(end_it, noheap::print_impl::buffer_size, format,
-                                  std::forward<Args>(args)...)
-                     .out;
-
-        log.throw_exception<TExcp>("<{}> {}", dynamic_owner.data(), buffer.data());
-    }
-
-private:
-    const log_handler                        &log;
-    noheap::log_impl::owner_impl::buffer_type dynamic_owner{};
+    int                fd_log;
+    mutable std::mutex m;
 };
 
 template<typename TReturn>

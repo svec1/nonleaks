@@ -7,9 +7,10 @@ using namespace boost;
 using dba = stream_audio::default_base_audio;
 using re  = noheap::runtime_error;
 
-constexpr log_handler log_main{{}};
-constexpr auto        name_config_file = "xxcore.json";
-constexpr auto        usage_string = "Usage: xxcore [-k generate a new local keypair]";
+constexpr auto name_log_file    = "xxcore.log";
+constexpr auto name_config_file = "xxcore.json";
+constexpr auto usage_string     = "Usage: xxcore [-k generate a new local keypair]";
+log_handler    handler{name_log_file};
 
 struct xxcore_config {
     std::string_view device;
@@ -104,28 +105,26 @@ void write_config(const json_config::buffer_config_type &buffer) {
 void print_cfg(const xxcore_config &cfg) {
     using nc_type = essu::noise_context_type;
 
-    log_main.to_console(" -- Sound architecture: {}", dba::arsnd_name);
-    log_main.to_console(" -- Sound device: {}", cfg.device);
-    log_main.to_console(" -- Audio config: ");
-    log_main.to_console("    | Bitrate: {} kbit/s", dba::cfg.bitrate / 1000);
-    log_main.to_console("    | Latency: {} ms", dba::cfg.latency);
-    log_main.to_console("    | Channels: {}", dba::cfg.channels);
-    log_main.to_console("    | Rate: {} hz", dba::cfg.sample_rate);
-    log_main.to_console("    | Sample size: {} bits", dba::cfg.bits_per_sample);
-    log_main.to_console(" -- Network config: ");
-    log_main.to_console("    | Packet size: {}", essu::packet_size);
-    log_main.to_console("    | Unit size: {}", essu::unit_size);
-    log_main.to_console("    | Payload data size: {}", essu::payload_data_size);
-    log_main.to_console("    | Max session number: {}", essu::max_session_number);
-    log_main.to_console("    | Noise pattern: {}",
-                        std::string_view(nc_type::get_name_id()));
-    log_main.to_console(
-        "    | MLDSA type: {}",
-        mldsa_native::mldsa_native_wrapper<noheap::buffer_bytes_type<1>{}>::type);
+    log_handler::proxy log{handler.create_proxy({"CONFIG"})};
+
+    log.info("Sound architecture: {}", dba::arsnd_name);
+    log.info("Sound device: {}", cfg.device);
+    log.info("Bitrate: {} kbit/s", dba::cfg.bitrate / 1000);
+    log.info("Latency: {} ms", dba::cfg.latency);
+    log.info("Channels: {}", dba::cfg.channels);
+    log.info("Rate: {} hz", dba::cfg.sample_rate);
+    log.info("Sample size: {} bits", dba::cfg.bits_per_sample);
+    log.info("Packet size: {}", essu::packet_size);
+    log.info("Unit size: {}", essu::unit_size);
+    log.info("Payload data size: {}", essu::payload_data_size);
+    log.info("Max session number: {}", essu::max_session_number);
+    log.info("Noise pattern: {}", std::string_view(nc_type::get_name_id()));
+    log.info("MLDSA type: {}",
+             mldsa_native::mldsa_native_wrapper<noheap::buffer_bytes_type<1>{}>::type);
 }
 
 int main(int argc, char *argv[]) {
-    json_config                     config;
+    json_config                     config(handler);
     json_config::buffer_config_type buffer_config{};
     try {
         xxcore_config cfg = {.device = dba::default_device_playback};
@@ -142,16 +141,14 @@ int main(int argc, char *argv[]) {
                 config.get_buffer_config(buffer_config);
                 write_config(buffer_config);
             });
-            xxcore_service service(config.get_config());
+            xxcore_service service(handler, config.get_config());
             service.run();
         }
 
     } catch (const noheap::runtime_error &excp) {
-        log_main.exception_to_all(excp);
-        return 1;
+        handler.exit("{}", excp.what());
     } catch (const std::exception &excp) {
-        log_main.to_all("Program panic: {}", excp.what());
-        return 1;
+        handler.abort("Program panic: {}", excp.what());
     }
 
     return 0;

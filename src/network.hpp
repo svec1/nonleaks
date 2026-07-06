@@ -139,7 +139,8 @@ public:
     using packet_type       = action_type::packet_type;
 
 public:
-    udp_stream(Action &_act, asio::io_context &io, asio::ip::port_type _port);
+    udp_stream(const log_handler &handler, Action &_act, asio::io_context &io,
+               asio::ip::port_type _port);
     udp_stream(udp_stream &&)      = delete;
     udp_stream(const udp_stream &) = delete;
 
@@ -156,12 +157,10 @@ private:
     void register_async_send();
     void register_async_receive(ipv v);
 
-    static void handle_error(const system::error_code &ec);
+    void handle_error(const system::error_code &ec);
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("NSTREAM");
-    static constexpr log_handler log{buffer_owner};
+    log_handler::proxy log;
 
 private:
     mutable std::shared_mutex m;
@@ -178,8 +177,10 @@ private:
 };
 
 template<Derived_from_action Action>
-udp_stream<Action>::udp_stream(Action &_act, asio::io_context &io, port_type _port)
-    : act(_act), socket_v4(io), socket_v6(io), port(_port), running(false) {
+udp_stream<Action>::udp_stream(const log_handler &handler, Action &_act,
+                               asio::io_context &io, port_type _port)
+    : log(handler.create_proxy({"NETWORK"})), act(_act), socket_v4(io), socket_v6(io),
+      port(_port), running(false) {
 }
 template<Derived_from_action Action>
 udp_stream<Action>::~udp_stream() {
@@ -205,8 +206,7 @@ decltype(auto) udp_stream<Action>::is_running() const {
 template<Derived_from_action Action>
 void udp_stream<Action>::open(ipv _v) {
     {
-        static constexpr const auto init_socket = [](socket_type &socket, ipv v,
-                                                     port_type port) {
+        const auto init_socket = [this](socket_type &socket, ipv v, port_type port) {
             system::error_code ec;
 
             socket.open(v == ipv::v4 ? asio::ip::udp::v4() : asio::ip::udp::v6(), ec);
@@ -222,7 +222,7 @@ void udp_stream<Action>::open(ipv _v) {
 
         std::unique_lock<decltype(m)> m_lock(m);
         if (running)
-            log.throw_exception<network_error>("Failed to open udp stream.");
+            log.throw_and_log<network_error>({}, "Failed to open udp stream.");
 
         v       = _v;
         running = true;
@@ -243,7 +243,7 @@ template<Derived_from_action Action>
 void udp_stream<Action>::close() {
     std::unique_lock<decltype(m)> m_lock(m);
     if (!running)
-        log.throw_exception<network_error>("Failed to close udp stream.");
+        log.throw_and_log<network_error>({}, "Failed to close udp stream.");
 
     if (v == ipv::v4 || v == ipv::v4v6) {
         socket_v4.cancel();
@@ -334,7 +334,7 @@ void udp_stream<Action>::handle_error(const system::error_code &ec) {
     if (!ec.value())
         return;
 
-    log.throw_exception<network_error>("Network error: {}", ec.message());
+    log.throw_and_log<network_error>({}, "{}", ec.message());
 }
 
 buffer_address_type utils::get_address_bytes(address_type addr) {
@@ -421,7 +421,7 @@ buffer_address_type utils::string_address_to_bytes(std::string_view address, ipv
 
         return buffer_tmp;
     } catch (...) {
-        throw noheap::logic_error("Invalid string of ip address: {}.", address);
+        throw noheap::logic_error{};
     }
 }
 

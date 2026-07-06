@@ -31,11 +31,6 @@ public:
     std::size_t get_bitrate() const;
 
 private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("CODER_AUDIO");
-    static constexpr log_handler log{buffer_owner};
-
-private:
     OpusEncoder *enc;
     OpusDecoder *dec;
 };
@@ -49,11 +44,11 @@ coder_audio<_cfg>::coder_audio() {
 
     error = opus_encoder_init(enc, cfg.sample_rate, cfg.channels, OPUS_APPLICATION_VOIP);
     if (error)
-        throw noheap::runtime_error(buffer_owner, "Failed to init encoder.");
+        throw noheap::runtime_error("Failed to init encoder.");
 
     error = opus_decoder_init(dec, cfg.sample_rate, cfg.channels);
     if (error)
-        throw noheap::runtime_error(buffer_owner, "Failed to init decoder.");
+        throw noheap::runtime_error("Failed to init decoder.");
 
     opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(1));
     opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(10));
@@ -70,7 +65,7 @@ coder_audio<_cfg>::encode_buffer_type
         reinterpret_cast<std::uint8_t *>(buffer_tmp.data()), encode_buffer_size);
 
     if (count_frames == -1)
-        throw noheap::runtime_error(buffer_owner, "Failed to encode buffer of samples.");
+        throw noheap::runtime_error("Failed to encode buffer of samples.");
 
     return buffer_tmp;
 }
@@ -92,7 +87,7 @@ coder_audio<_cfg>::noencode_buffer_type
     if (_lost)
         lost = true;
     if (count_frames == -1)
-        throw noheap::runtime_error(buffer_owner, "Failed to decode buffer of samples.");
+        throw noheap::runtime_error("Failed to decode buffer of samples.");
 
     return buffer_tmp;
 }

@@ -94,21 +94,12 @@ protected:
     static consteval std::string_view
         stream_audio_error_to_string(stream_audio_error error_number);
 
-    template<typename... Args>
-    constexpr void message(std::format_string<Args...> format, Args &&...args);
-
     template<stream_audio_error error_number, bool on_errno = false, typename... Args>
-    static constexpr void throw_error(std::format_string<Args...> format = "",
-                                      Args &&...args);
+    void throw_error(std::format_string<Args...> format = "", Args &&...args);
 
 public:
     static std::string_view device_playback;
     static std::string_view device_capture;
-
-protected:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner(arsnd_name);
-    static constexpr log_handler log{buffer_owner};
 
 protected:
     stream_audio_mode mode;
@@ -190,16 +181,9 @@ consteval std::string_view
     }
 }
 template<audio_config _cfg>
-template<typename... Args>
-constexpr void base_audio<_cfg>::message(std::format_string<Args...> format,
-                                         Args &&...args) {
-    log.to_console(format, std::forward<Args>(args)...);
-}
-template<audio_config _cfg>
 template<base_audio<_cfg>::stream_audio_error error_number, bool on_errno,
          typename... Args>
-constexpr void base_audio<_cfg>::throw_error(std::format_string<Args...> format,
-                                             Args &&...args) {
+void base_audio<_cfg>::throw_error(std::format_string<Args...> format, Args &&...args) {
     noheap::runtime_error::buffer_type buffer{}, buffer_format{};
 
     auto end_it = buffer.begin();
@@ -225,9 +209,7 @@ constexpr void base_audio<_cfg>::throw_error(std::format_string<Args...> format,
         errno = 0;
     }
 
-    noheap::runtime_error error(std::move(buffer));
-    error.set_owner(buffer_owner);
-    throw std::move(error);
+    throw noheap::runtime_error("{}", buffer.data());
 }
 
 template<audio_config _cfg>

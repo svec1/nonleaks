@@ -43,11 +43,6 @@ public:
     static inline bool sign_open(const buffer_pub_type         &public_key,
                                  const std::span<noheap::ubyte> buffer_data,
                                  std::span<noheap::ubyte>       output_data);
-
-private:
-    static constexpr noheap::log_impl::owner_impl::buffer_type buffer_owner =
-        noheap::log_impl::create_owner("MLDSA_NATIVE_WRAPPER");
-    static constexpr log_handler log{buffer_owner};
 };
 
 } // namespace mldsa_native
@@ -57,7 +52,7 @@ template<auto _context>
 void mldsa_native::mldsa_native_wrapper<_context>::generate_keypair(
     keypair_type &keypair) {
     if (crypto_sign_keypair(keypair.priv.data(), keypair.pub.data()))
-        log.throw_exception("Failed to generate keypair.");
+        throw noheap::runtime_error("Failed to generate keypair.");
 }
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
@@ -70,7 +65,7 @@ void mldsa_native::mldsa_native_wrapper<_context>::sign_data(
             reinterpret_cast<const noheap::ubyte *>(buffer_data.data()),
             buffer_data.size(), reinterpret_cast<const noheap::ubyte *>(context.data()),
             context.size(), reinterpret_cast<const noheap::ubyte *>(private_key.data())))
-        log.throw_exception("Failed to sign data.");
+        throw noheap::runtime_error("Failed to sign data.");
 }
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
@@ -81,14 +76,14 @@ void mldsa_native::mldsa_native_wrapper<_context>::sign_data(
 
     if (output_data.size()
         < buffer_data.size() + noheap::buffer_size<buffer_signature_type>)
-        log.throw_exception("Invalid output data size.");
+        throw noheap::runtime_error("Invalid output data size.");
 
     if (crypto_sign(
             reinterpret_cast<noheap::ubyte *>(output_data.data()), &output_data_size,
             reinterpret_cast<const noheap::ubyte *>(buffer_data.data()),
             buffer_data.size(), reinterpret_cast<const noheap::ubyte *>(context.data()),
             context.size(), reinterpret_cast<const noheap::ubyte *>(private_key.data())))
-        log.throw_exception("Failed to sign data.");
+        throw noheap::runtime_error("Failed to sign data.");
 }
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
@@ -100,7 +95,7 @@ bool mldsa_native::mldsa_native_wrapper<_context>::sign_open(
     if (buffer_data.size() < noheap::buffer_size<buffer_signature_type>
         || output_data.size()
                < buffer_data.size() - noheap::buffer_size<buffer_signature_type>)
-        log.throw_exception("Invalid output data size.");
+        throw noheap::runtime_error("Invalid output data size.");
 
     return !crypto_sign_open(
         reinterpret_cast<noheap::ubyte *>(output_data.data()), &output_data_size,
@@ -119,7 +114,7 @@ bool mldsa_native::mldsa_native_wrapper<_context>::sign_validate(
             reinterpret_cast<const noheap::ubyte *>(buffer_data.data()),
             buffer_data.size(), reinterpret_cast<const noheap::ubyte *>(context.data()),
             context.size(), reinterpret_cast<const noheap::ubyte *>(public_key.data())))
-        log.throw_exception("Failed to verify signing of data.");
+        throw noheap::runtime_error("Failed to verify signing of data.");
 }
 
 #endif

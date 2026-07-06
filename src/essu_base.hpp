@@ -93,7 +93,7 @@ public:
 class session_error : public base_error {
 public:
     using base_error::base_error;
-}; 
+};
 
 namespace utils {
     inline auto get_string_unit_type(unit_type::unit_type_enum unit_type) noexcept {
