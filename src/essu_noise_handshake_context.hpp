@@ -47,7 +47,7 @@ public:
     inline noise::noise_action                        get_action() const;
     inline std::uint16_t                              get_available_batch_number() const;
     inline std::uint64_t                              get_handshake_id() const;
-    inline buffer_current_state_hash_type             get_current_state_hash();
+    inline buffer_current_state_hash_type             get_current_state_hash() const;
     inline const noise_context_type::buffer_key_type &get_remote_public_key() const;
     inline typename noise_context_type::hash_state<
         essu::noise_handshake_context::config_hash_type>                                               &
@@ -249,11 +249,12 @@ std::uint16_t essu::noise_handshake_context::get_available_batch_number() const 
     return available_batch_number;
 }
 essu::noise_handshake_context::buffer_current_state_hash_type
-    essu::noise_handshake_context::get_current_state_hash() {
+    essu::noise_handshake_context::get_current_state_hash() const {
     buffer_current_state_hash_type current_state_hash{};
 
-    noheap::transform_buffers(current_state_hash, handshake_payload, std::bit_xor{});
-    noheap::transform_buffers(current_state_hash, handshake_hash, std::bit_xor{});
+    noheap::transform_buffers(current_state_hash, ext, std::bit_xor{});
+    noheap::transform_buffers(current_state_hash, remote_public_key, std::bit_xor{});
+    noheap::transform_buffers(current_state_hash, pre_shared_key, std::bit_xor{});
     noheap::transform_buffers(current_state_hash, unique_value, std::bit_xor{});
     noheap::transform_buffers(
         current_state_hash,
@@ -267,12 +268,6 @@ essu::noise_handshake_context::buffer_current_state_hash_type
             const noheap::buffer_bytes_type<sizeof(handshake_id), noheap::rbyte>>(
             handshake_id),
         std::bit_xor{});
-    if (payload_cipher_state.has_encrypt_key()) {
-        noheap::transform_buffers(
-            current_state_hash, payload_cipher_state.get_encrypt_nonce(), std::bit_xor{});
-        noheap::transform_buffers(
-            current_state_hash, payload_cipher_state.get_decrypt_nonce(), std::bit_xor{});
-    }
 
     return current_state_hash_state.get_hash(hash_state.get_hash(current_state_hash));
 }
@@ -333,6 +328,8 @@ void essu::noise_handshake_context::stop() {
     noise_context.dump();
 
     status                   = status_enum(static_cast<std::size_t>(status) + 1);
+    handshake_payload           = {};
+    handshake_hash              = {};
     handshake_attempt_number = 0;
 }
 void essu::noise_handshake_context::check_noise_action(noise::noise_action expected) {
@@ -383,12 +380,14 @@ void essu::noise_handshake_context::generate_pair_ephemeral_obfs_key() {
     cipher_tmp.set_encrypt_key(
         noheap::clip_buffer<32, 0>(hash_state.get_hash(unique_value)));
     cipher_tmp.set_encrypt_nonce({});
-	cipher_tmp.set_encrypt_counter_block(handshake_attempt_number);
+    cipher_tmp.set_encrypt_counter_block(handshake_attempt_number);
     cipher_tmp.encrypt({});
 
-    // Generates keystream: encrypts keystream which is filled zeros with shared_handshake_value
+    // Generates keystream: encrypts keystream which is filled zeros with
+    // shared_handshake_value
     cipher_tmp.encrypt_buffer.set(keystream, keystream.size() - noise_config.mac_size);
-    cipher_tmp.set_encrypt_key(noheap::clip_buffer<32, 0>(hash_state.get_hash(shared_handshake_value)));
+    cipher_tmp.set_encrypt_key(
+        noheap::clip_buffer<32, 0>(hash_state.get_hash(shared_handshake_value)));
     cipher_tmp.set_encrypt_nonce({});
     cipher_tmp.encrypt({});
 

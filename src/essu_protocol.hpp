@@ -88,7 +88,7 @@ public:
         get_handshake_number(const session_info_type &session_info) noexcept;
 
     static inline noise_handshake_context::buffer_current_state_hash_type
-        get_current_state_hash(session_info_type &session_info);
+        get_current_state_hash(const session_info_type &session_info);
 
 private:
     static inline bool
@@ -404,7 +404,7 @@ bool essu::protocol::determine_affiliation_packet(
     return false;
 }
 essu::noise_handshake_context::buffer_current_state_hash_type
-    essu::protocol::get_current_state_hash(session_info_type &session_info) {
+    essu::protocol::get_current_state_hash(const session_info_type &session_info) {
     return session_info.handshake_context.get_current_state_hash();
 }
 

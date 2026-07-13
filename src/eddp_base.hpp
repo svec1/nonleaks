@@ -6,23 +6,23 @@
 
 namespace eddp {
 constexpr std::size_t packet_size      = essu::payload_data_size;
-constexpr std::size_t header_data_size = 40;
+constexpr std::size_t header_data_size = 33;
 constexpr std::size_t buffer_data_size = packet_size - header_data_size;
 
-struct payload_packet_type {
-    enum class payload_packet_type_enum : std::uint64_t {
+struct [[gnu::packed]] payload_packet_type {
+    enum class payload_packet_type_enum : std::uint8_t {
         session_request = 0,
         session_created,
         session_confirmed,
         node_resolved,
         data
     };
-    struct header_data_type {
-        payload_packet_type_enum type;
+    struct [[gnu::packed]] header_data_type {
         std::uint64_t            destination_id;
         std::uint64_t            number;
         std::uint64_t            ack_through;
         std::uint64_t            bitmap;
+        payload_packet_type_enum type;
     };
 
     static_assert(sizeof(header_data_type) == header_data_size, "Invalid header size.");
