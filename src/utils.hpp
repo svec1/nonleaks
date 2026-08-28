@@ -542,17 +542,28 @@ public:
     }
 
 public:
-    class iterator {
-    public:
-        using value_type      = T;
-        using difference_type = std::ptrdiff_t;
-        using pointer         = value_type *;
-        using reference       = value_type &;
+    template<typename _T>
+        requires std::same_as<std::decay_t<_T>, monotonic_placement_new_array>
+    class base_iterator {
+        friend class monotonic_placement_new_array;
 
     public:
-        explicit iterator(monotonic_placement_new_array<T, _buffer_size> &_array,
-                          std::size_t                                     _it)
-            : array(_array), it(_it) {}
+        using value_type        = _T;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = value_type *;
+        using reference         = value_type &;
+        using iterator_category = std::forward_iterator_tag;
+
+    private:
+        explicit base_iterator(_T *_array_p, std::size_t _it)
+            : array_p(_array_p), it(_it) {}
+
+    public:
+        base_iterator() noexcept                                      = default;
+        base_iterator(const base_iterator &) noexcept                 = default;
+        base_iterator &operator=(const base_iterator &other) noexcept = default;
+
+    public:
         decltype(auto) operator++() {
             ++it;
             return *this;
@@ -562,32 +573,46 @@ public:
             return *this;
         }
         auto operator++(int) {
-            iterator retval = *this;
+            base_iterator retval = *this;
             ++(*this);
             return retval;
         }
         decltype(auto) operator+(std::size_t _it) const {
-            return iterator(array, it + _it);
+            return iterator(array_p, it + _it);
         }
         decltype(auto) operator-(std::size_t _it) const {
-            return iterator(array, it - _it);
+            return iterator(array_p, it - _it);
         }
-        auto operator<=>(const iterator &other) const { return it <=> other.it; }
-        bool operator==(const iterator &other) const { return it == other.it; }
-        decltype(auto) operator*() { return array.get().at(it); }
-        decltype(auto) operator->() { return &array.get().at(it); }
+        auto operator<=>(const base_iterator &other) const { return it <=> other.it; }
+        bool operator==(const base_iterator &other) const {
+            return array_p == other.array_p && it == other.it;
+        }
+        decltype(auto) operator*() const { return array_p->at(it); }
+        decltype(auto) operator->() const { return &array_p->at(it); }
 
-    private:
-        std::reference_wrapper<monotonic_placement_new_array<T, _buffer_size>> array;
-        std::size_t                                                            it;
+    protected:
+        _T         *array_p{};
+        std::size_t it{};
+    };
+    class const_iterator;
+    class iterator : public base_iterator<monotonic_placement_new_array> {
+    public:
+        using base_iterator<monotonic_placement_new_array>::base_iterator;
+        operator const_iterator() { return const_iterator(this->array_p, this->it); }
+    };
+    class const_iterator : public base_iterator<const monotonic_placement_new_array> {
+    public:
+        using base_iterator<const monotonic_placement_new_array>::base_iterator;
     };
 
-    iterator begin() { return iterator(*this, 0); }
-    iterator end() { return iterator(*this, this->size()); }
+    decltype(auto) begin() { return iterator(this, 0); }
+    decltype(auto) end() { return iterator(this, this->size()); }
+    decltype(auto) cbegin() const { return const_iterator(this, 0); }
+    decltype(auto) cend() const { return const_iterator(this, this->size()); }
 
 public:
     template<typename... Args>
-    void emplace(iterator it, Args &&...args) {
+    void emplace(const_iterator it, Args &&...args) {
         if (count_pushed == buffer_size())
             throw logic_error("Buffer overflow.");
         if (it > end())
@@ -598,7 +623,7 @@ public:
         // Copies bytes to it+1
         auto        data      = this->template data<noheap::ubyte *>();
         auto        bytes_end = data + sizeof(T) * count_pushed;
-        auto        bytes_it  = data + sizeof(T) * std::distance(this->begin(), it);
+        auto        bytes_it  = data + sizeof(T) * std::distance(this->cbegin(), it);
         std::size_t it_tmp    = count_pushed;
         for (auto bytes_it_tmp = bytes_end - 1; bytes_it_tmp >= bytes_it;
              --bytes_it_tmp) {
@@ -609,7 +634,7 @@ public:
         }
 
         ++count_pushed;
-        ::new (reinterpret_cast<void *>(&(*it))) T(std::forward<Args>(args)...);
+        ::new (reinterpret_cast<void *>(const_cast<T *>(&(*it)))) T(std::forward<Args>(args)...);
     }
 
     template<typename _T>
@@ -627,7 +652,7 @@ public:
         emplace(size() ? end() : begin(), std::forward<Args>(args)...);
     }
 
-    void erase(iterator it) {
+    void erase(const_iterator it) {
         if (!count_pushed || it == end())
             throw logic_error("Invalid access.");
 
@@ -636,8 +661,8 @@ public:
         // Copies bytes to it-1
         auto        data      = this->template data<noheap::ubyte *>();
         auto        bytes_end = data + sizeof(T) * count_pushed;
-        auto        bytes_it  = data + sizeof(T) * std::distance(this->begin(), it);
-        std::size_t it_tmp    = std::distance(this->begin(), it);
+        auto        bytes_it  = data + sizeof(T) * std::distance(this->cbegin(), it);
+        std::size_t it_tmp    = std::distance(this->cbegin(), it);
         for (auto bytes_it_tmp = bytes_it; bytes_it_tmp < bytes_end; ++bytes_it_tmp) {
             std::size_t distance_mod = std::distance(data, bytes_it_tmp) % sizeof(T);
             if (distance_mod == 0)
@@ -663,7 +688,9 @@ public:
 
     template<typename _T>
     decltype(auto) operator[](this _T &&_this, std::size_t it) {
-        return *(_this.template data<T *>() + it);
+        using T_c =
+            std::conditional_t<std::is_const_v<std::remove_reference_t<_T>>, const T, T>;
+        return *(_this.template data<T_c *>() + it);
     }
 
 private:
@@ -765,7 +792,7 @@ template<std::size_t size>
 struct std::formatter<noheap::buffer_chars_type<size>> {
 public:
     constexpr auto parse(std::format_parse_context &ctx) { return ctx.begin(); }
-    auto format(auto &&s, std::format_context &ctx) const {
+    auto           format(auto &&s, std::format_context &ctx) const {
         return std::format_to(ctx.out(), "{}", s.data());
     }
 };

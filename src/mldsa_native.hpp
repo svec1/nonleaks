@@ -18,29 +18,29 @@ public:
     static constexpr auto        context = _context;
     static constexpr std::size_t type    = MLD_CONFIG_PARAMETER_SET;
 
-    using buffer_priv_type      = buffer_type<CRYPTO_SECRETKEYBYTES>;
-    using buffer_pub_type       = buffer_type<CRYPTO_PUBLICKEYBYTES>;
+    using buffer_private_key      = buffer_type<CRYPTO_SECRETKEYBYTES>;
+    using buffer_public_key       = buffer_type<CRYPTO_PUBLICKEYBYTES>;
     using buffer_signature_type = buffer_type<CRYPTO_BYTES>;
 
     struct keypair_type {
-        buffer_priv_type priv;
-        buffer_pub_type  pub;
+        buffer_private_key priv;
+        buffer_public_key  pub;
     };
 
 public:
     mldsa_native_wrapper() = delete;
 
     static inline void generate_keypair(keypair_type &keypair);
-    static inline void sign_data(const buffer_priv_type        &private_key,
+    static inline void sign_data(const buffer_private_key        &private_key,
                                  const std::span<noheap::ubyte> buffer_data,
                                  buffer_signature_type         &buffer_signature);
-    static inline void sign_data(const buffer_priv_type        &private_key,
+    static inline void sign_data(const buffer_private_key        &private_key,
                                  const std::span<noheap::ubyte> buffer_data,
                                  std::span<noheap::ubyte>       output_data);
-    static inline bool sign_validate(const buffer_pub_type         &public_key,
+    static inline bool sign_validate(const buffer_public_key         &public_key,
                                      const std::span<noheap::ubyte> buffer_data,
                                      const buffer_signature_type   &buffer_signature);
-    static inline bool sign_open(const buffer_pub_type         &public_key,
+    static inline bool sign_open(const buffer_public_key         &public_key,
                                  const std::span<noheap::ubyte> buffer_data,
                                  std::span<noheap::ubyte>       output_data);
 };
@@ -57,7 +57,7 @@ void mldsa_native::mldsa_native_wrapper<_context>::generate_keypair(
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
 void mldsa_native::mldsa_native_wrapper<_context>::sign_data(
-    const buffer_priv_type &private_key, const std::span<noheap::ubyte> buffer_data,
+    const buffer_private_key &private_key, const std::span<noheap::ubyte> buffer_data,
     buffer_signature_type &buffer_signature) {
     std::size_t signature_size = 0;
     if (crypto_sign_signature(
@@ -70,7 +70,7 @@ void mldsa_native::mldsa_native_wrapper<_context>::sign_data(
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
 void mldsa_native::mldsa_native_wrapper<_context>::sign_data(
-    const buffer_priv_type &private_key, const std::span<noheap::ubyte> buffer_data,
+    const buffer_private_key &private_key, const std::span<noheap::ubyte> buffer_data,
     std::span<noheap::ubyte> output_data) {
     std::size_t output_data_size = 0;
 
@@ -88,7 +88,7 @@ void mldsa_native::mldsa_native_wrapper<_context>::sign_data(
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
 bool mldsa_native::mldsa_native_wrapper<_context>::sign_open(
-    const buffer_pub_type &public_key, const std::span<noheap::ubyte> buffer_data,
+    const buffer_public_key &public_key, const std::span<noheap::ubyte> buffer_data,
     std::span<noheap::ubyte> output_data) {
     std::size_t output_data_size = 0;
 
@@ -106,7 +106,7 @@ bool mldsa_native::mldsa_native_wrapper<_context>::sign_open(
 template<auto _context>
     requires noheap::Buffer_bytes_or_chars<decltype(_context)>
 bool mldsa_native::mldsa_native_wrapper<_context>::sign_validate(
-    const buffer_pub_type &public_key, const std::span<noheap::ubyte> buffer_data,
+    const buffer_public_key &public_key, const std::span<noheap::ubyte> buffer_data,
     const buffer_signature_type &buffer_signature) {
     if (crypto_sign_verify(
             reinterpret_cast<const noheap::ubyte *>(buffer_signature.data()),

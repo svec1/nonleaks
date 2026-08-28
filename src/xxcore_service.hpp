@@ -104,19 +104,31 @@ void xxcore_service::run() {
         stream.open(config.on_ipv6 ? network::ipv::v4v6 : network::ipv::v4);
 
         {
+            std::size_t count_received_packets = 0;
+            auto        start                  = std::chrono::steady_clock::now();
             while (action.is_valid()) {
-                while (action.exist_received_packets())
+                while (action.exist_received_packets()) {
                     (void) action.pop_packet();
-                for (std::size_t it = 0; it < action.get_registered_session_s_size();
-                     ++it) {
+                    ++count_received_packets;
+                }
+                for (decltype(auto) it = action.get_registered_session_s().cbegin();
+                     it < action.get_registered_session_s().cend(); ++it) {
                     essu::packet_type pckt;
                     essu::set_dummy_packet(pckt);
-                    action.push_packet({pckt, noheap::ssize_t(it)});
+                    action.push_packet({pckt, it});
                 }
-                for (std::size_t it = 0; it < action.get_incoming_session_s_size(); ++it)
+                for (decltype(auto) it = action.get_incoming_session_s().cbegin();
+                     it < action.get_incoming_session_s().cend(); ++it)
                     action.register_incoming_session(it);
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                if (auto end = std::chrono::steady_clock::now();
+                    std::chrono::duration_cast<std::chrono::seconds>(end - start)
+                    == std::chrono::seconds(1)) {
+                    log.info("Pckts/s: {}", count_received_packets);
+                    start                  = end;
+                    count_received_packets = 0;
+                }
             }
             throw action.get_error();
         }
@@ -144,8 +156,8 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
                                       bool hex_encoding = true) {
         auto string_key = this->get_object_field<std::string_view>(object, field_name);
         if (string_key.size() >= buffer_key.size() && !hex_encoding)
-            log.throw_and_log<noheap::runtime_error>({}, "The key[{}] field has a large size",
-                                             field_name);
+            log.throw_and_log<noheap::runtime_error>(
+                {}, "The key[{}] field has a large size", field_name);
 
         if (hex_encoding) {
             decltype(noheap::hex_encode(buffer_key)) buffer_key_hex{};
@@ -184,7 +196,7 @@ void json_config::set_buffer_config(const buffer_config_type &buffer, bool new_k
                          })
             != config.endpoint_config_s.end())
             log.throw_and_log<noheap::runtime_error>({}, "Endpoint[{}] is already exist.",
-                                             global_field_key.data());
+                                                     global_field_key.data());
 
         decltype(config_type::endpoint_config_s)::value_type::second_type
             endpoint_config{};
@@ -274,21 +286,23 @@ template<typename T>
 T json_config::get_object_field(const json::object    &object,
                                 const std::string_view field_string) {
     if (!object.contains(field_string))
-        log.throw_and_log<noheap::runtime_error>({}, "Field[{}] does not existed.", field_string);
+        log.throw_and_log<noheap::runtime_error>({}, "Field[{}] does not existed.",
+                                                 field_string);
     decltype(auto) field = object.at(field_string);
     if constexpr (std::same_as<T, bool>) {
         if (!field.is_bool())
-            log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be bool.", field_string);
+            log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be bool.",
+                                                     field_string);
         return field.as_bool();
     } else if constexpr (std::is_integral_v<T>) {
         if (!field.is_int64())
             log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be number.",
-                                             field_string);
+                                                     field_string);
         return field.as_int64();
     } else if constexpr (std::same_as<T, std::string_view>) {
         if (!field.is_string())
             log.throw_and_log<noheap::runtime_error>({}, "Field[{}] must be string.",
-                                             field_string);
+                                                     field_string);
         return field.as_string();
     } else
         static_assert(false, "Invalid T type.");

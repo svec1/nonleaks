@@ -5,8 +5,11 @@
 #include "noise.hpp"
 #include "utils.hpp"
 
+// TODO:
+// Protocol description:
+// 1. Establishing connection between two nodes have to establish handshake NoisePSK_XXhfs_25519+MLKEM768_XChaChaPoly_SHA3512.
+//
 namespace essu {
-
 constexpr std::size_t timeout_ms                 = 7500;
 constexpr std::size_t packet_size                = 1376;
 constexpr std::size_t header_data_size           = 17;
